@@ -644,6 +644,16 @@ st.sidebar.markdown("""
 </div>
 """, unsafe_allow_html=True)
 st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔑 API Configuration")
+custom_key_val = st.sidebar.text_input(
+    "Custom Gemini API Key:",
+    type="password",
+    value=st.session_state.get("custom_api_key", ""),
+    help="Overrides default API key. Get a key from Google AI Studio. Left blank for rule-based offline fallback."
+)
+if custom_key_val != st.session_state.get("custom_api_key", ""):
+    st.session_state["custom_api_key"] = custom_key_val
+    st.rerun()
 
 if api_key:
     st.sidebar.markdown("""
@@ -846,32 +856,6 @@ with col_left:
         
         # --- STEP 1: ONBOARDING ---
         if st.session_state["step"] == 1:
-            st.markdown("##### 🔑 Gemini API Key Configuration")
-            custom_key_val = st.text_input(
-                "Enter custom Gemini API Key (Optional with fallback offline mode):",
-                type="password",
-                value=st.session_state.get("custom_api_key", ""),
-                help="Overrides default API key. Get a key from Google AI Studio. Left blank for rule-based offline fallback.",
-                placeholder="Paste your GEMINI_API_KEY here..."
-            )
-            if custom_key_val != st.session_state.get("custom_api_key", ""):
-                st.session_state["custom_api_key"] = custom_key_val
-                st.rerun()
-
-            if not api_key:
-                st.warning(
-                    "⚠️ **Active Workspace Warning (Offline Match Mode)**: "
-                    "No Gemini API key is configured. StatsBuddy will analyze datasets in complete offline mode, "
-                    "relying on local algorithmic rule fallbacks. Interactive AI dissertation writeups, "
-                    "scholarly chapter-4 drafts, and contextual tutoring chats will be disabled."
-                )
-            else:
-                st.success(
-                    "🟢 **StatsBuddy AI Connection Active**: Custom Gemini API token has been read "
-                    "and scholarly dissertation drafts and active AI tutoring are fully functional!"
-                )
-
-            st.markdown("---")
             st.markdown("##### 📁 Upload Spreadsheet Data")
             uploaded_file = st.file_uploader("Upload spreadsheet (.csv) to begin parsing raw stats:", type=["csv"])
             
@@ -883,17 +867,21 @@ with col_left:
                         st.session_state["file_name"] = uploaded_file.name
                         reset_variable_states()
                         
-                        # Generate AI Recommendation
-                        with st.spinner("StatsBuddy AI preloading recommendations and variables..."):
-                            res_data = get_ai_recommendation_safely(df, uploaded_file.name)
-                        st.session_state["ai_recommended_test"] = res_data.get("recommended_test")
-                        st.session_state["ai_test_reason"] = res_data.get("test_reason")
-                        st.session_state["ai_run_type"] = res_data.get("run_type")
-                        st.session_state["ai_preloaded_roles"] = res_data.get("variables", {})
-                        st.session_state["ai_preloaded_scales"] = res_data.get("scales", {})
-                        st.session_state["ai_preloaded_questions"] = res_data.get("preset_questions_by_step", {})
-                        
-                        st.toast(f"✅ Loaded {uploaded_file.name}")
+                        # Only generate AI Recommendation if API key is active
+                        if api_key:
+                            with st.spinner("StatsBuddy AI preloading recommendations and variables..."):
+                                res_data = get_ai_recommendation_safely(df, uploaded_file.name)
+                            st.session_state["ai_recommended_test"] = res_data.get("recommended_test")
+                            st.session_state["ai_test_reason"] = res_data.get("test_reason")
+                            st.session_state["ai_run_type"] = res_data.get("run_type")
+                            st.session_state["ai_preloaded_roles"] = res_data.get("variables", {})
+                            st.session_state["ai_preloaded_scales"] = res_data.get("scales", {})
+                            st.session_state["ai_preloaded_questions"] = res_data.get("preset_questions_by_step", {})
+                            st.toast(f"✅ Loaded {uploaded_file.name} with AI analysis.")
+                        else:
+                            st.warning("⚠️ Loaded dataset in offline mode. AI recommendations disabled.")
+                            st.toast(f"✅ Loaded {uploaded_file.name} (Offline)")
+
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error reading CSV: {e}")
@@ -1240,25 +1228,35 @@ with col_left:
                         break
                 
                 st.markdown("##### 🧪 Select / Override Active Testing Algorithm")
+                
+                # To detect if user overridden the test
+                ai_recommended_test = st.session_state.get("ai_recommended_test")                
+
                 selected_test_name = st.selectbox(
-                    "You can override the matching algorithm and force any specific test below:",
+                    "Statistical test selected by AI advisor (or manually override below):",
                     options=list(standard_test_options.keys()),
                     index=rec_val_index,
-                    help="Normally, StatsBuddy matches the mathematically ideal test. But if you have assigned categorical columns or custom configurations, you can choose another test here."
+                    help="StatsBuddy automatically selects the most appropriate test. You can manually choose a different test if you prefer another methodology."
                 )
                 run_type = standard_test_options[selected_test_name]
                 recommended_test = selected_test_name
-                    
-                st.markdown(f"""
-                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                    <h5 style="color: #475569; margin: 0 0 6px 0; font-size: 13px; font-weight: 700;">💡 Why StatMentor / StatsBuddy recommends this configuration:</h5>
-                    <ul style="font-size: 12px; color: #64748b; margin: 0; padding-left: 18px; line-height: 1.55;">
-                        <li><b>Variable Role Matching</b>: The independent variable (<i>{main_iv}</i>) and dependent variable (<i>{main_dv}</i>) roles align perfectly with this analytical method.</li>
-                        <li><b>Scale of Measurement Alignment</b>: Your scales are mapped as <b>{iv_scale}</b> for cause and <b>{dv_scale}</b> for effect. This combination mathematically mandates <b>{recommended_test}</b> to avoid statistical bias or invalid standard errors.</li>
-                        <li><b>Sample Size Validity</b>: This test leverages maximum mathematical degrees of freedom across your active samples ({len(df)} records) to guarantee high statistical confidence.</li>
-                    </ul>
-                </div>
-                """, unsafe_allow_html=True)
+
+                # Show recommendation reason only if NOT overridden AND API is active (or recommendation exists)
+                if api_key and ai_recommended_test and selected_test_name == ai_recommended_test:
+                    st.markdown(f"""
+                    <div style="background-color: var(--panel-bg); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h5 style="color: var(--color-text); margin: 0 0 6px 0; font-size: 13px; font-weight: 700;">💡 Why StatMentor / StatsBuddy recommends this configuration:</h5>
+                        <ul style="font-size: 12px; color: var(--sub-text); margin: 0; padding-left: 18px; line-height: 1.55;">
+                            <li><b>Variable Role Matching</b>: The independent variable (<i>{main_iv}</i>) and dependent variable (<i>{main_dv}</i>) roles align perfectly with this analytical method.</li>
+                            <li><b>Scale of Measurement Alignment</b>: Your scales are mapped as <b>{iv_scale}</b> for cause and <b>{dv_scale}</b> for effect.</li>
+                            <li><b>Sample Size Validity</b>: This test leverages maximum mathematical degrees of freedom across your active samples ({len(df)} records) to guarantee high statistical confidence.</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+                elif not api_key:
+                    st.info("💡 Note: AI recommendation details are hidden in offline mode.")
+                else:
+                    st.info("💡 Note: You have manually overridden the AI-selected test. Recommendation methodology details are hidden.")
                 
                 # Manual trigger button for AI analysis
                 rec_cols = st.columns([8, 4])
@@ -1651,14 +1649,14 @@ with col_right:
 # ==========================================
 
 st.markdown("""
-<div style="background-color: white; border-top: 2px solid #f1f5f9; padding: 15px; border-radius: 12px; margin-top: 30px; text-align: center; font-size: 12px; color: #64748b;">
+<div style="background-color: var(--panel-bg); border-top: 2px solid var(--border-color); padding: 15px; border-radius: 12px; margin-top: 30px; text-align: center; font-size: 12px; color: var(--sub-text);">
     <p style="margin: 0 0 4px 0;">&copy; 2026 StatsBuddy Engine. Translating complex methodologies step-by-step.</p>
     <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
-        <span style="color: #10b981; font-weight: 700;">● Calculations Certified Offline-Safe</span>
+        <span style="color: var(--success-banner-border); font-weight: 700;">● Calculations Certified Offline-Safe</span>
         <span>|</span>
-        <a href="#" style="color: #4f46e5; text-decoration: none;">Methodology Trees</a>
+        <a href="#" style="color: var(--accent-color); text-decoration: none;">Methodology Trees</a>
         <span>|</span>
-        <a href="#" style="color: #4f46e5; text-decoration: none;">Scale Rules</a>
+        <a href="#" style="color: var(--accent-color); text-decoration: none;">Scale Rules</a>
     </div>
 </div>
 """, unsafe_allow_html=True)
