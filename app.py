@@ -477,15 +477,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Theme and API state cleanly in session state to maintain state across page/tab switching
-if "is_dark_theme" not in st.session_state:
-    st.session_state["is_dark_theme"] = True
+# Initialize Dark Theme and API state
+st.session_state["is_dark_theme"] = True
 
 if "custom_api_key" not in st.session_state:
     st.session_state["custom_api_key"] = ""
-
-is_dark = st.session_state["is_dark_theme"]
-theme_mode = "Classic Dark Mode" if is_dark else "Scholarly Light Mode"
 
 raw_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
 custom_key = st.session_state["custom_api_key"]
@@ -498,51 +494,28 @@ if api_key:
     except Exception:
         pass
 
-# Safe and legible CSS variables matching selected theme mode
-if is_dark:
-    st.markdown("""
-    <style>
-    :root {
-        --bg-app: #0f172a;
-        --panel-bg: #1e293b;
-        --color-text: #f8fafc;
-        --sub-text: #94a3b8;
-        --border-color: #334155;
-        --input-bg: #0f172a;
-        --input-text: #f8fafc;
-        --accent-color: #38bdf8;
-        --shadow-style: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
-        --success-banner-bg: #064e3b;
-        --success-banner-text: #a7f3d0;
-        --success-banner-border: #059669;
-        --error-banner-bg: #7f1d1d;
-        --error-banner-text: #fecaca;
-        --error-banner-border: #b91c1c;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <style>
-    :root {
-        --bg-app: #f8fafc;
-        --panel-bg: #ffffff;
-        --color-text: #0f172a;
-        --sub-text: #64748b;
-        --border-color: #e2e8f0;
-        --input-bg: #ffffff;
-        --input-text: #0f172a;
-        --accent-color: #4f46e5;
-        --shadow-style: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-        --success-banner-bg: #ecfdf5;
-        --success-banner-text: #065f46;
-        --success-banner-border: #10b981;
-        --error-banner-bg: #fef2f2;
-        --error-banner-text: #991b1b;
-        --error-banner-border: #ef4444;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# Always apply Dark Theme CSS
+st.markdown("""
+<style>
+:root {
+    --bg-app: #0f172a;
+    --panel-bg: #1e293b;
+    --color-text: #f8fafc;
+    --sub-text: #94a3b8;
+    --border-color: #334155;
+    --input-bg: #0f172a;
+    --input-text: #f8fafc;
+    --accent-color: #38bdf8;
+    --shadow-style: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+    --success-banner-bg: #064e3b;
+    --success-banner-text: #a7f3d0;
+    --success-banner-border: #059669;
+    --error-banner-bg: #7f1d1d;
+    --error-banner-text: #fecaca;
+    --error-banner-border: #b91c1c;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # General Stylesheets resolving contrast and applying smooth Inter typography
 st.markdown("""
@@ -785,9 +758,11 @@ with head_col1:
     </div>
     """, unsafe_allow_html=True)
 with head_col2:
-    is_dark = st.toggle("🌙 Dark Mode", value=st.session_state["is_dark_theme"], key="toggle_theme_is_dark")
-    if is_dark != st.session_state["is_dark_theme"]:
-        st.session_state["is_dark_theme"] = is_dark
+    if st.button("🔄 Reset Application"):
+        reset_variable_states()
+        st.session_state["chat_history"] = []
+        st.session_state["uploaded_df"] = None
+        st.session_state["file_name"] = ""
         st.rerun()
 
 # Step progression visual indicator bar
@@ -1026,7 +1001,8 @@ with col_left:
                             rec_role = "Exclude"
                             rec_reason = "complex or high-cardinality values that are best excluded to focus strictly on primary active study variables."
                     
-                    st.markdown(f"<p style='font-size:11.5px; color:var(--accent-color); margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_role}</b> because {rec_reason}</p>", unsafe_allow_html=True)
+                    if api_key:
+                        st.markdown(f"<p style='font-size:11.5px; color:var(--accent-color); margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_role}</b> because {rec_reason}</p>", unsafe_allow_html=True)
                     
         # --- STEP 3: SCALES OF MEASUREMENT ---
         elif st.session_state["step"] == 3:
@@ -1091,7 +1067,8 @@ with col_left:
                                 rec_scale = "Ratio (True Zero)"
                                 rec_scale_reason = "this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations."
                         
-                        st.markdown(f"<p style='font-size:11.5px; color:var(--accent-color); margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_scale}</b> because {rec_scale_reason}</p>", unsafe_allow_html=True)
+                        if api_key:
+                            st.markdown(f"<p style='font-size:11.5px; color:var(--accent-color); margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_scale}</b> because {rec_scale_reason}</p>", unsafe_allow_html=True)
 
         # --- STEP 4: RESEARCH HYPOTHESES ---
         elif st.session_state["step"] == 4:
@@ -1630,12 +1607,9 @@ with col_right:
                         if "403" in err_msg or "denied" in err_msg.lower() or "api key" in err_msg.lower() or "project" in err_msg.lower():
                             friendly_err = (
                                 "✨ **StatMentor Notice**:\n\n"
-                                "Active generative AI recommendation chat features require a valid **Gemini API Key**. "
-                                "Your Google Cloud project / API Key has been denied access (403) or is currently missing.\n\n"
-                                "🔧 **How to resolve this**:\n"
-                                "1. Grab a free API key from [Google AI Studio](https://aistudio.google.com/).\n"
-                                "2. Configure your `GEMINI_API_KEY` in the AI Studio settings or check your billing status to restore chat capabilities instantly!\n\n"
-                                "*(Note: All local offline data analysis, distribution plots, metrics, and rule-based testing fallback recommendations remain 100% functional!)*"
+                                "Active AI capabilities require a valid **Gemini API Key**. "
+                                "It seems your current API configuration is either missing or has insufficient permissions/quotas.\n\n"
+                                "🔧 **How to resolve**: Please ensure your `GEMINI_API_KEY` is correctly set in the sidebar settings, or verify your billing/quota at [Google AI Studio](https://aistudio.google.com/)."
                             )
                             st.session_state["chat_history"].append(("assistant", friendly_err))
                         else:
