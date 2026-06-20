@@ -477,83 +477,197 @@ st.set_page_config(
     layout="wide"
 )
 
-# Render premium sidebar
-st.sidebar.markdown("""
-<div style="text-align: center; padding: 10px 0;">
-    <span style="font-size: 32px;">🎓</span>
-    <h2 style="margin: 5px 0 0 0; color: #4338ca; font-size: 18px; font-weight: 800;">StatsBuddy</h2>
-    <p style="font-size: 11px; color: #64748b; margin: 0;">Non-Statisticians Research Partner</p>
-</div>
-""", unsafe_allow_html=True)
-st.sidebar.markdown("---")
+# Initialize Theme and API state cleanly in session state to maintain state across page/tab switching
+if "is_dark_theme" not in st.session_state:
+    st.session_state["is_dark_theme"] = True
 
-theme_mode = st.sidebar.radio("☀️ / 🌙 Select Workspace Theme", ["Classic Dark Mode", "Scholarly Light Mode"], index=0)
+if "custom_api_key" not in st.session_state:
+    st.session_state["custom_api_key"] = ""
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔑 API Custom Override")
+is_dark = st.session_state["is_dark_theme"]
+theme_mode = "Classic Dark Mode" if is_dark else "Scholarly Light Mode"
+
 raw_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-custom_key = st.sidebar.text_input(
-    "Enter custom Gemini API Key:", 
-    type="password", 
-    value=raw_key if raw_key else "", 
-    help="Overrides default API key if provided. Get a key from Google AI Studio."
-)
+custom_key = st.session_state["custom_api_key"]
 api_key = custom_key if custom_key else raw_key
 
 # We configure generative AI globally if API key exists
 if api_key:
-    genai.configure(api_key=api_key)
-    st.sidebar.success("🟢 StatsBuddy AI Connected!")
-else:
-    st.sidebar.warning("⚠️ StatsBuddy AI Disconnected (Fallback rules active)")
+    try:
+        genai.configure(api_key=api_key)
+    except Exception:
+        pass
 
-# CSS dynamic injection matching the selected theme mode
-if theme_mode == "Scholarly Light Mode":
+# Safe and legible CSS variables matching selected theme mode
+if is_dark:
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-    html, body, [class*="css"], .stApp {
-        font-family: 'Inter', sans-serif;
-        background-color: #f8fafc !important;
-        color: #0f172a !important;
-    }
-    div[data-testid="stSidebar"] {
-        background-color: #ffffff !important;
-        border-right: 1px solid #e2e8f0 !important;
-    }
-    div[data-testid="stExpander"] {
-        background-color: #ffffff !important;
-        border: 1px solid #e2e8f0 !important;
-    }
-    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
-        color: #0f172a !important;
-        background-color: #ffffff !important;
+    :root {
+        --bg-app: #0f172a;
+        --panel-bg: #1e293b;
+        --color-text: #f8fafc;
+        --sub-text: #94a3b8;
+        --border-color: #334155;
+        --input-bg: #0f172a;
+        --input-text: #f8fafc;
+        --accent-color: #38bdf8;
+        --shadow-style: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+        --success-banner-bg: #064e3b;
+        --success-banner-text: #a7f3d0;
+        --success-banner-border: #059669;
+        --error-banner-bg: #7f1d1d;
+        --error-banner-text: #fecaca;
+        --error-banner-border: #b91c1c;
     }
     </style>
     """, unsafe_allow_html=True)
 else:
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-    html, body, [class*="css"], .stApp {
-        font-family: 'Inter', sans-serif;
-        background-color: #0f172a !important;
-        color: #f8fafc !important;
-    }
-    div[data-testid="stSidebar"] {
-        background-color: #0b0f19 !important;
-        border-right: 1px solid #1e293b !important;
-    }
-    div[data-testid="stExpander"] {
-        background-color: #1e293b !important;
-        border: 1px solid #334155 !important;
-    }
-    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
-        color: #f8fafc !important;
-        background-color: #1e293b !important;
+    :root {
+        --bg-app: #f8fafc;
+        --panel-bg: #ffffff;
+        --color-text: #0f172a;
+        --sub-text: #64748b;
+        --border-color: #e2e8f0;
+        --input-bg: #ffffff;
+        --input-text: #0f172a;
+        --accent-color: #4f46e5;
+        --shadow-style: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+        --success-banner-bg: #ecfdf5;
+        --success-banner-text: #065f46;
+        --success-banner-border: #10b981;
+        --error-banner-bg: #fef2f2;
+        --error-banner-text: #991b1b;
+        --error-banner-border: #ef4444;
     }
     </style>
     """, unsafe_allow_html=True)
+
+# General Stylesheets resolving contrast and applying smooth Inter typography
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+html, body, .stApp {
+    font-family: 'Inter', sans-serif !important;
+    background-color: var(--bg-app) !important;
+    color: var(--color-text) !important;
+}
+
+/* Ensure headings have proper themed text color */
+h1, h2, h3, h4, h5, h6 {
+    color: var(--color-text) !important;
+    font-weight: 700 !important;
+}
+
+p, li, span, label, div {
+    color: var(--color-text);
+}
+
+.stMarkdown div, .stMarkdown p, .stMarkdown li, .stMarkdown span {
+    color: var(--color-text) !important;
+}
+
+.stSubheader div {
+    color: var(--color-text) !important;
+}
+
+/* Fix text contrast in help labels and secondary widgets descriptor */
+.stWidgetLabel p, label p, .stWidgetLabel span, label span {
+    color: var(--color-text) !important;
+}
+
+/* Sub-headings, status text descriptions */
+.sub-text {
+    color: var(--sub-text) !important;
+}
+
+/* Sidebar structure container card */
+div[data-testid="stSidebar"] {
+    background-color: var(--panel-bg) !important;
+    border-right: 1px solid var(--border-color) !important;
+}
+
+div[data-testid="stSidebar"] * {
+    color: var(--color-text);
+}
+
+/* Expanders card dashboard grids */
+div[data-testid="stExpander"] {
+    background-color: var(--panel-bg) !important;
+    border: 1px solid var(--border-color) !important;
+}
+
+/* Input boxes, Textareas & Combobox drop downs */
+.stTextInput input, .stTextArea textarea, .stSelectbox [role="combobox"], select {
+    background-color: var(--input-bg) !important;
+    color: var(--input-text) !important;
+    border: 1px solid var(--border-color) !important;
+}
+
+/* Select options menu dropdown popover lists */
+div[data-baseweb="popover"], div[data-baseweb="menu"], ul[role="listbox"] {
+    background-color: var(--panel-bg) !important;
+    border: 1px solid var(--border-color) !important;
+}
+
+div[data-baseweb="popover"] *, div[data-baseweb="menu"] * {
+    color: var(--color-text) !important;
+    background-color: var(--panel-bg) !important;
+}
+
+/* Streamlit Tabs headings styling rules */
+button[data-baseweb="tab"] {
+    color: var(--sub-text) !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: var(--accent-color) !important;
+    font-weight: 700 !important;
+    border-bottom-color: var(--accent-color) !important;
+}
+
+/* Dynamic container overlays and alerts notifications */
+.stAlert, div[data-testid="stNotification"] {
+    background-color: var(--panel-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--color-text) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Render premium sidebar
+st.sidebar.markdown("""
+<div style="text-align: center; padding: 20px 0 10px 0;">
+    <span style="font-size: 40px; display: block; margin-bottom: 5px;">🎓</span>
+    <h2 style="margin: 0; color: #4338ca; font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">StatsBuddy</h2>
+    <p style="font-size: 11px; color: var(--sub-text); margin: 4px 0 0 0;">Non-Statisticians Research Partner</p>
+</div>
+""", unsafe_allow_html=True)
+st.sidebar.markdown("---")
+
+if api_key:
+    st.sidebar.markdown("""
+    <div style="background-color: var(--success-banner-bg); border: 1px solid var(--success-banner-border); padding: 12px; border-radius: 8px; margin-bottom: 10px; text-align: center;">
+        <span style="font-weight: 700; font-size: 11px; color: var(--success-banner-text);">🟢 AI COACHING ACTIVE</span>
+        <p style="margin: 4px 0 0 0; font-size: 10px; color: var(--success-banner-text); opacity: 0.95;">Gemini neural connection is fully functional. StatsBuddy advisor is ready!</p>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.sidebar.markdown("""
+    <div style="background-color: var(--error-banner-bg); border: 1px solid var(--error-banner-border); padding: 12px; border-radius: 8px; margin-bottom: 10px; text-align: center;">
+        <span style="font-weight: 700; font-size: 11px; color: var(--error-banner-text);">⚠️ OFFLINE LOCAL MODE</span>
+        <p style="margin: 4px 0 0 0; font-size: 10px; color: var(--error-banner-text); opacity: 0.95;">No custom API Key provided. StatsBuddy is running on offline math rules.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Study Details sidebar panel
+st.sidebar.markdown("### 📊 Active Study Workspace")
+if st.session_state.get("uploaded_df") is not None:
+    st.sidebar.caption(f"📁 Dataset: `{st.session_state['file_name']}`")
+    st.sidebar.caption(f"📝 Records Count: `{len(st.session_state['uploaded_df'])}` rows")
+    st.sidebar.caption(f"🎚️ Step Stage: `Step {st.session_state['step']} of 6`")
+else:
+    st.sidebar.caption("📁 No active dataset loaded yet. Please complete Step 1.")
 
 # ==========================================
 # 🗄️ STATE INITIALIZATION (st.session_state)
@@ -607,6 +721,9 @@ if "ai_preloaded_scales" not in st.session_state:
 if "ai_preloaded_questions" not in st.session_state:
     st.session_state["ai_preloaded_questions"] = {}
 
+if "pending_coach_query" not in st.session_state:
+    st.session_state["pending_coach_query"] = None
+
 def reset_variable_states():
     st.session_state["step"] = 1
     st.session_state["variables"] = {}
@@ -641,24 +758,27 @@ if len(st.session_state["chat_history"]) == 0:
     st.session_state["chat_history"] = [("assistant", welcome_msg)]
 
 # ==========================================
-# 🎓 NAVIGATION HEADER
+# 🎓 NAVIGATION HEADER & CONTROL PANEL
 # ==========================================
 
-st.markdown("""
-<div style="background-color: white; padding: 20px; border-bottom: 2px solid #f1f5f9; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);">
-    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; align-items: center; gap: 15px;">
-            <div style="padding: 10px; background-color: #4f46e5; border-radius: 12px; color: white;">
-                <span style="font-size: 22px; font-weight: bold;">🎓</span>
-            </div>
-            <div>
-                <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -0.02em;">StatsBuddy</h1>
-                <p style="font-size: 12px; font-weight: 500; color: #64748b; margin: 0;">The Student's Friendly Research Methodology & Analysis Coach</p>
-            </div>
+head_col1, head_col2 = st.columns([7, 3])
+with head_col1:
+    st.markdown("""
+    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+        <div style="padding: 10px; background-color: #4f46e5; border-radius: 12px; color: white; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px;">
+            <span style="font-size: 22px; font-weight: bold;">🎓</span>
+        </div>
+        <div>
+            <h1 style="font-size: 24px; font-weight: 800; color: var(--color-text); margin: 0; letter-spacing: -0.02em; line-height: 1.1;">StatsBuddy</h1>
+            <p style="font-size: 11px; font-weight: 500; color: var(--sub-text); margin: 0; line-height: 1.1;">The Student's Friendly Research Methodology & Analysis Coach</p>
         </div>
     </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+with head_col2:
+    is_dark = st.toggle("🌙 Dark Mode", value=st.session_state["is_dark_theme"], key="toggle_theme_is_dark")
+    if is_dark != st.session_state["is_dark_theme"]:
+        st.session_state["is_dark_theme"] = is_dark
+        st.rerun()
 
 # Step progression visual indicator bar
 steps_titles = [
@@ -726,6 +846,32 @@ with col_left:
         
         # --- STEP 1: ONBOARDING ---
         if st.session_state["step"] == 1:
+            st.markdown("##### 🔑 Gemini API Key Configuration")
+            custom_key_val = st.text_input(
+                "Enter custom Gemini API Key (Optional with fallback offline mode):",
+                type="password",
+                value=st.session_state.get("custom_api_key", ""),
+                help="Overrides default API key. Get a key from Google AI Studio. Left blank for rule-based offline fallback.",
+                placeholder="Paste your GEMINI_API_KEY here..."
+            )
+            if custom_key_val != st.session_state.get("custom_api_key", ""):
+                st.session_state["custom_api_key"] = custom_key_val
+                st.rerun()
+
+            if not api_key:
+                st.warning(
+                    "⚠️ **Active Workspace Warning (Offline Match Mode)**: "
+                    "No Gemini API key is configured. StatsBuddy will analyze datasets in complete offline mode, "
+                    "relying on local algorithmic rule fallbacks. Interactive AI dissertation writeups, "
+                    "scholarly chapter-4 drafts, and contextual tutoring chats will be disabled."
+                )
+            else:
+                st.success(
+                    "🟢 **StatsBuddy AI Connection Active**: Custom Gemini API token has been read "
+                    "and scholarly dissertation drafts and active AI tutoring are fully functional!"
+                )
+
+            st.markdown("---")
             st.markdown("##### 📁 Upload Spreadsheet Data")
             uploaded_file = st.file_uploader("Upload spreadsheet (.csv) to begin parsing raw stats:", type=["csv"])
             
@@ -892,7 +1038,7 @@ with col_left:
                             rec_role = "Exclude"
                             rec_reason = "complex or high-cardinality values that are best excluded to focus strictly on primary active study variables."
                     
-                    st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_role}</b> because {rec_reason}</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p style='font-size:11.5px; color:var(--accent-color); margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_role}</b> because {rec_reason}</p>", unsafe_allow_html=True)
                     
         # --- STEP 3: SCALES OF MEASUREMENT ---
         elif st.session_state["step"] == 3:
@@ -957,7 +1103,7 @@ with col_left:
                                 rec_scale = "Ratio (True Zero)"
                                 rec_scale_reason = "this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations."
                         
-                        st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_scale}</b> because {rec_scale_reason}</p>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='font-size:11.5px; color:var(--accent-color); margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_scale}</b> because {rec_scale_reason}</p>", unsafe_allow_html=True)
 
         # --- STEP 4: RESEARCH HYPOTHESES ---
         elif st.session_state["step"] == 4:
@@ -1402,42 +1548,51 @@ with col_right:
         q1 = questions[0] if len(questions) > 0 else "Explain variables matching."
         q2 = questions[1] if len(questions) > 1 else "How to analyze dataset results?"
         
-        st.markdown("<p style='font-size:11px; font-weight:700; color:#cbd5e1; margin: 5px 0 2px 0;'>💡 Presets suggestions (Contextual to active step):</p>", unsafe_allow_html=True)
+        st.markdown("<p style='font-size:11px; font-weight:700; color:var(--sub-text); margin: 5px 0 2px 0;'>💡 Presets suggestions (Contextual to active step):</p>", unsafe_allow_html=True)
         suggest_cols = st.columns([1.1, 1.1, 0.8])
         with suggest_cols[0]:
             btn_lbl_1 = q1[:25] + "..." if len(q1) > 27 else q1
             if st.button(btn_lbl_1, use_container_width=True, key="preset_1", help=q1):
                 st.session_state["chat_history"].append(("user", q1))
-                st.session_state["active_coach_query"] = q1
+                st.session_state["pending_coach_query"] = q1
                 st.rerun()
         with suggest_cols[1]:
             btn_lbl_2 = q2[:25] + "..." if len(q2) > 27 else q2
             if st.button(btn_lbl_2, use_container_width=True, key="preset_2", help=q2):
                 st.session_state["chat_history"].append(("user", q2))
-                st.session_state["active_coach_query"] = q2
+                st.session_state["pending_coach_query"] = q2
                 st.rerun()
         with suggest_cols[2]:
             if st.button("🧹 Clear", use_container_width=True, key="clear_chat"):
                 st.session_state["chat_history"] = []
                 st.session_state["active_coach_query"] = None
+                st.session_state["pending_coach_query"] = None
                 st.toast("🧹 Chat history cleared successfully!")
                 st.rerun()
                 
         # Main chat interactive text box
         chat_inp = st.chat_input("Ask StatsBuddy stats inquiries...")
         
-        active_query = ""
+        # 1. Capture new incoming chat input safely
         if chat_inp:
-            active_query = chat_inp
             st.session_state["chat_history"].append(("user", chat_inp))
+            st.session_state["pending_coach_query"] = chat_inp
+            st.rerun()
         elif st.session_state.get("active_coach_query"):
-            active_query = st.session_state["active_coach_query"]
+            q_val = st.session_state["active_coach_query"]
+            st.session_state["chat_history"].append(("user", q_val))
+            st.session_state["pending_coach_query"] = q_val
             st.session_state["active_coach_query"] = None
+            st.rerun()
             
-        if active_query:
+        # 2. Process pending queries with active session checkpoint stability
+        pending_query = st.session_state.get("pending_coach_query")
+        if pending_query:
             if not api_key:
                 st.error("⚠️ Gemini API disconnect. Active API secret key missing.")
                 st.session_state["chat_history"].append(("assistant", "I am currently disconnected because Google Gemini API credentials are required. Please input a Gemini API Key in the settings block above!"))
+                st.session_state["pending_coach_query"] = None
+                st.rerun()
             else:
                 with st.spinner("StatsBuddy thinking..."):
                     try:
@@ -1467,7 +1622,7 @@ with col_right:
                         for sender, val in st.session_state["chat_history"][:-1]:
                             full_prompt += f"{'User' if sender == 'user' else 'StatsBuddy'}: {val}\n"
                             
-                        full_prompt += f"Latest user question: {active_query}\nStatsBuddy coaching response:"
+                        full_prompt += f"Latest user question: {pending_query}\nStatsBuddy coaching response:"
                         
                         response = safe_generate_content(sys_tutor_instructions, full_prompt)
                         reply_val = response.text
@@ -1487,7 +1642,9 @@ with col_right:
                             st.session_state["chat_history"].append(("assistant", friendly_err))
                         else:
                             st.session_state["chat_history"].append(("assistant", f"❌ API Error: StatMentor encountered a connection problem: {str(err)}"))
-            st.rerun()
+                    
+                    st.session_state["pending_coach_query"] = None
+                    st.rerun()
 
 # ==========================================
 # 📊 FOOTER STATS WARRANTY
