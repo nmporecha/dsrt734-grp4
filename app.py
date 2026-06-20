@@ -41,6 +41,31 @@ def make_json_serializable(obj):
     else:
         return obj
 
+def safe_generate_content(system_instruction, prompt):
+    """
+    Safely creates generative model with fallbacks to avoid 403/Project Denied access problems.
+    """
+    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    last_err = None
+    for model in models_to_try:
+        try:
+            model_instance = genai.GenerativeModel(
+                model_name=model,
+                system_instruction=system_instruction
+            )
+            response = model_instance.generate_content(prompt)
+            return response
+        except Exception as err:
+            err_str = str(err).lower()
+            if "403" in err_str or "denied" in err_str or "project" in err_str or "not found" in err_str or "support" in err_str:
+                last_err = err
+                continue
+            else:
+                raise err
+    if last_err:
+        raise last_err
+    raise Exception("All Gemini model options failed to respond.")
+
 # ==========================================
 # 📊 MODULAR STATISTICAL PROCESSING FUNCTIONS
 # ==========================================
@@ -467,12 +492,23 @@ cols_step = st.columns(6)
 for idx, title in enumerate(steps_titles):
     step_num = idx + 1
     with cols_step[idx]:
+        label = title
         if st.session_state["step"] == step_num:
-            st.markdown(f"<div style='text-align: center; font-weight: 800; border-bottom: 4px solid #4f46e5; padding-bottom: 5px; color: #4f46e5; font-size: 13px;'>{title}</div>", unsafe_allow_html=True)
+            label = f"✨ {title}"
         elif st.session_state["step"] > step_num:
-            st.markdown(f"<div style='text-align: center; font-weight: 600; border-bottom: 4px solid #10b981; padding-bottom: 5px; color: #10b981; font-size: 13px;'>{title} ✓</div>", unsafe_allow_html=True)
+            label = f"{title} ✓"
+            
+        if st.button(label, key=f"step_btn_{step_num}", use_container_width=True):
+            st.session_state["step"] = step_num
+            st.rerun()
+
+        # Visual indicator bar below button
+        if st.session_state["step"] == step_num:
+            st.markdown("<div style='border-bottom: 4px solid #4f46e5; margin-top: -12px; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+        elif st.session_state["step"] > step_num:
+            st.markdown("<div style='border-bottom: 4px solid #10b981; margin-top: -12px; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
         else:
-            st.markdown(f"<div style='text-align: center; font-weight: 400; border-bottom: 4px solid #e2e8f0; padding-bottom: 5px; color: #94a3b8; font-size: 13px;'>{title}</div>", unsafe_allow_html=True)
+            st.markdown("<div style='border-bottom: 4px solid #cbd5e1; margin-top: -12px; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 st.markdown("<div style='margin-bottom: 25px;'></div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -593,13 +629,23 @@ with col_left:
                         else:
                             st.session_state["variables"][col_str] = "Exclude"
                     
-                    val = st.selectbox(
+                    val = st.select_slider(
                         f"📊 Column: **{col_str}** | (Samples: {samples_list}, Unique count: {unique_count})",
                         options=["Cause (Independent)", "Effect (Dependent)", "Covariate (Control)", "Exclude"],
-                        index=["Cause (Independent)", "Effect (Dependent)", "Covariate (Control)", "Exclude"].index(st.session_state["variables"][col_str]),
+                        value=st.session_state["variables"][col_str],
                         key=f"role_{col_str}"
                     )
                     st.session_state["variables"][col_str] = val
+                    
+                    # UI friendly explanation of why the recommendation or selected role is correct
+                    if val == "Effect (Dependent)":
+                        st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Effect (Dependent)</b> because continuous numerical profiles (unique values = {unique_count}) are mathematically ideal representative outcome metrics for comparative or regression modeling.</p>", unsafe_allow_html=True)
+                    elif val == "Cause (Independent)":
+                        st.markdown(f"<p style='font-size:11.5px; color:#10b981; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Cause (Independent)</b> because containing discrete subsets (unique count = {unique_count}) makes it highly suitable for splitting comparison parameters and grouping cohorts.</p>", unsafe_allow_html=True)
+                    elif val == "Covariate (Control)":
+                        st.markdown("<p style='font-size:11.5px; color:#6366f1; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Covariate (Control)</b> to isolate other continuous parameters from biasing the main independent effect.</p>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<p style='font-size:11.5px; color:#64748b; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Exclude</b> to completely disregard this parameter card and focus strictly on primary active study variables.</p>", unsafe_allow_html=True)
                     
         # --- STEP 3: SCALES OF MEASUREMENT ---
         elif st.session_state["step"] == 3:
@@ -628,13 +674,23 @@ with col_left:
                             else:
                                 st.session_state["scales"][col_str] = "Ratio (True Zero)"
                                 
-                        val = st.selectbox(
+                        val = st.select_slider(
                             f"📐 **{col_str}** | (Classified as {st.session_state['variables'][col_str]})",
                             options=["Nominal (Categories)", "Ordinal (Ordered)", "Interval (Arbitrary)", "Ratio (True Zero)"],
-                            index=["Nominal (Categories)", "Ordinal (Ordered)", "Interval (Arbitrary)", "Ratio (True Zero)"].index(st.session_state["scales"][col_str]),
+                            value=st.session_state["scales"][col_str],
                             key=f"scale_{col_str}"
                         )
                         st.session_state["scales"][col_str] = val
+                        
+                        # UI friendly explanation of why the selected or recommended scale is correct
+                        if val == "Nominal (Categories)":
+                            st.markdown("<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Nominal (Categories)</b> because this column contains qualitative grouping attributes (non-ordered attributes) serving as categorical cohorts rather than continuous mathematical values.</p>", unsafe_allow_html=True)
+                        elif val == "Ordinal (Ordered)":
+                            st.markdown(f"<p style='font-size:11.5px; color:#d97706; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Ordinal (Ordered)</b> because the small subset of distinct levels ({unique_count} unique items) suggests relative ordered positions or ranks (e.g. Likert scales) where intervals are not mathematically equal.</p>", unsafe_allow_html=True)
+                        elif val == "Interval (Arbitrary)":
+                            st.markdown("<p style='font-size:11.5px; color:#06b6d4; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Interval (Arbitrary)</b> because numbers have a precise increment scale, but zero represents an arbitrary point rather than an absolute physical baseline (e.g. Temperature scales).</p>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("<p style='font-size:11.5px; color:#10b981; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Ratio (True Zero)</b> because this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations.</p>", unsafe_allow_html=True)
 
         # --- STEP 4: RESEARCH HYPOTHESES ---
         elif st.session_state["step"] == 4:
@@ -726,10 +782,19 @@ with col_left:
                     run_type = "chi_square"
                     
                 st.markdown(f"""
-                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 12px;">
                     <h4 style="color: #166534; margin: 0; font-size: 15px; font-weight: 800;">🚀 Recommended Statistical Test Found!</h4>
                     <p style="font-size: 14px; font-weight: 800; color: #15803d; margin: 6px 0 2px 0;">{recommended_test}</p>
                     <p style="font-size: 12px; color: #166534; margin: 0; line-height: 1.4;">{test_reason}</p>
+                </div>
+                
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <h5 style="color: #475569; margin: 0 0 6px 0; font-size: 13px; font-weight: 700;">💡 Why StatMentor recommends this configuration:</h5>
+                    <ul style="font-size: 12px; color: #64748b; margin: 0; padding-left: 18px; line-height: 1.55;">
+                        <li><b>Variable Role Matching</b>: The independent variable (<i>{main_iv}</i>) and dependent variable (<i>{main_dv}</i>) roles align perfectly with this analytical method.</li>
+                        <li><b>Scale of Measurement Alignment</b>: Your scales are mapped as <b>{iv_scale}</b> for cause and <b>{dv_scale}</b> for effect. This combination mathematically mandates <b>{recommended_test}</b> to avoid statistical bias or invalid standard errors.</li>
+                        <li><b>Sample Size Validity</b>: This test leverages maximum mathematical degrees of freedom across your active samples ({len(df)} records) to guarantee high statistical confidence.</li>
+                    </ul>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -835,12 +900,8 @@ with col_left:
                                         "2. A formal, publication-ready dissertation narrative strictly adhering to current APA Style guidelines. "
                                         "3. A Markdown-formatted statistical table displaying the results cleanly."
                                     )
-                                    model_apa = genai.GenerativeModel(
-                                        model_name="gemini-3.5-flash",
-                                        system_instruction=system_prompt_apa
-                                    )
-                                    prompt_apa = f"Here is the raw statistical output dictionary:\n{json.dumps(res_val, indent=2)}\n\nPlease write the final output strictly formatted withlayman explanation, APA narrative, and markdown table."
-                                    response_apa = model_apa.generate_content(prompt_apa)
+                                    prompt_apa = f"Here is the raw statistical output dictionary:\n{json.dumps(res_val, indent=2)}\n\nPlease write the final output strictly formatted with layman explanation, APA narrative, and markdown table."
+                                    response_apa = safe_generate_content(system_prompt_apa, prompt_apa)
                                     st.session_state["last_apa_report"] = response_apa.text
                                 except Exception as api_err:
                                     st.session_state["last_apa_report"] = f"❌ **Error generating APA report using Gemini:** {str(api_err)}"
@@ -908,12 +969,8 @@ with col_left:
                                         "2. A formal, publication-ready dissertation narrative strictly adhering to current APA Style guidelines. "
                                         "3. A Markdown-formatted statistical table displaying the results cleanly."
                                     )
-                                    model_apa = genai.GenerativeModel(
-                                        model_name="gemini-3.5-flash",
-                                        system_instruction=system_prompt_apa
-                                    )
-                                    prompt_apa = f"Here is the raw statistical output dictionary:\n{json.dumps(res, indent=2)}\n\nPlease write the final output strictly formatted withlayman explanation, APA narrative, and markdown table."
-                                    response_apa = model_apa.generate_content(prompt_apa)
+                                    prompt_apa = f"Here is the raw statistical output dictionary:\n{json.dumps(res, indent=2)}\n\nPlease write the final output strictly formatted with layman explanation, APA narrative, and markdown table."
+                                    response_apa = safe_generate_content(system_prompt_apa, prompt_apa)
                                     st.session_state["last_apa_report"] = response_apa.text
                                     st.rerun()
                                 except Exception as err:
@@ -968,7 +1025,7 @@ with col_right:
                         
         # Presets questions
         st.markdown("<p style='font-size:11px; font-weight:700; color:#475569; margin: 5px 0 2px 0;'>💡 Presets suggestions:</p>", unsafe_allow_html=True)
-        suggest_cols = st.columns(2)
+        suggest_cols = st.columns([1.1, 1.1, 0.8])
         with suggest_cols[0]:
             if st.button("What is continuous vs nominal?", use_container_width=True, key="preset_1"):
                 preset_query = "What is the key difference between a continuous variable and a nominal/categorical variable?"
@@ -980,6 +1037,12 @@ with col_right:
                 preset_query = "What is the difference between an Alternative Hypothesis (H1) and a Null Hypothesis (H0)?"
                 st.session_state["chat_history"].append(("user", preset_query))
                 st.session_state["active_coach_query"] = preset_query
+                st.rerun()
+        with suggest_cols[2]:
+            if st.button("🧹 Clear", use_container_width=True, key="clear_chat"):
+                st.session_state["chat_history"] = []
+                st.session_state["active_coach_query"] = None
+                st.toast("🧹 Chat history cleared successfully!")
                 st.rerun()
                 
         # Advanced API secret accordion config
@@ -1035,11 +1098,7 @@ with col_right:
                             
                         full_prompt += f"Latest user question: {active_query}\nStatsBuddy coaching response:"
                         
-                        model_coach = genai.GenerativeModel(
-                            model_name="gemini-3.5-flash",
-                            system_instruction=sys_tutor_instructions
-                        )
-                        response = model_coach.generate_content(full_prompt)
+                        response = safe_generate_content(sys_tutor_instructions, full_prompt)
                         reply_val = response.text
                         st.session_state["chat_history"].append(("assistant", reply_val))
                     except Exception as err:

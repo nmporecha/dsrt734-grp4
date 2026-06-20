@@ -85,15 +85,35 @@ async function startServer() {
         });
       }
 
-      // Query Gemini
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: contentsPayload,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
+      // Query Gemini with automatic model fallback to prevent project denied (403) errors.
+      let response;
+      const modelsToTry = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
+      let lastError: any = null;
+      for (const model of modelsToTry) {
+        try {
+          response = await ai.models.generateContent({
+            model: model,
+            contents: contentsPayload,
+            config: {
+              systemInstruction,
+              temperature: 0.7,
+            }
+          });
+          break;
+        } catch (error: any) {
+          const errStr = (error.message || "").toLowerCase();
+          if (errStr.includes("403") || errStr.includes("denied") || errStr.includes("project") || error.status === 403 || errStr.includes("not found")) {
+            lastError = error;
+            console.warn(`Model ${model} failed, trying next fallback...`);
+            continue;
+          } else {
+            throw error;
+          }
         }
-      });
+      }
+      if (!response) {
+        throw lastError || new Error("All generative model fallbacks failed.");
+      }
 
       const reply = response.text || "I was unable to formulate a response. Let me try again with more details.";
       return res.json({ reply });
