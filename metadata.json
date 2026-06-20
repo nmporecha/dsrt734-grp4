@@ -1,0 +1,6 @@
+{
+  "name": "StatMentor AI",
+  "description": "An intelligent statistical research assistant and interactive decision support system with automated data quality reports and descriptive analytics dashboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
