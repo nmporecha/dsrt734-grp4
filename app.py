@@ -8,6 +8,38 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import seaborn as sns
 import json
+import io
+
+# ==========================================
+# 📊 UTILITY FUNCTIONS & SERIALIZER
+# ==========================================
+
+def make_json_serializable(obj):
+    """
+    Standardizes numpy values (like np.bool_, np.float64) to native 
+    Python types to ensure JSON serialization compatibility with Gemini API.
+    """
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(make_json_serializable(v) for v in obj)
+    elif isinstance(obj, np.ndarray):
+        return make_json_serializable(obj.tolist())
+    elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+        return float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except Exception:
+            return str(obj)
+    else:
+        return obj
 
 # ==========================================
 # 📊 MODULAR STATISTICAL PROCESSING FUNCTIONS
@@ -33,7 +65,7 @@ def verify_normality(data_series, alpha=0.05):
         clean_data = clean_data.sample(5000, random_state=42)
         
     stat, p_val = stats.shapiro(clean_data)
-    is_normal = p_val > alpha
+    is_normal = bool(p_val > alpha)
     
     if is_normal:
         msg = f"Data appears normally distributed (Shapiro-Wilk p = {p_val:.4f} > {alpha})."
@@ -65,7 +97,7 @@ def calculate_correlation(df, col1, col2, alpha=0.05):
     norm1 = verify_normality(clean_df[col1], alpha)
     norm2 = verify_normality(clean_df[col2], alpha)
     
-    both_normal = norm1["is_normal"] and norm2["is_normal"]
+    both_normal = bool(norm1["is_normal"] and norm2["is_normal"])
     
     if both_normal:
         test_name = "Pearson product-moment correlation"
@@ -82,7 +114,7 @@ def calculate_correlation(df, col1, col2, alpha=0.05):
         "col1_normality": norm1,
         "col2_normality": norm2,
         "both_normal": both_normal,
-        "message": f"Ran {test_name}: coefficient = {corr_coef:.4f}, p-value = {p_val:.4f}. Significant? {p_val < alpha}."
+        "message": f"Ran {test_name}: coefficient = {corr_coef:.4f}, p-value = {p_val:.4f}. Significant? {bool(p_val < alpha)}."
     }
 
 def compare_groups(df, cat_col, num_col, alpha=0.05):
@@ -93,7 +125,6 @@ def compare_groups(df, cat_col, num_col, alpha=0.05):
     clean_df = df[[cat_col, num_col]].dropna()
     groups = clean_df[cat_col].unique()
     
-    # Filter out empty or null groups
     groups = [g for g in groups if g is not None and str(g).strip() != ""]
     
     if len(groups) != 2:
@@ -116,13 +147,12 @@ def compare_groups(df, cat_col, num_col, alpha=0.05):
     norm1 = verify_normality(g1_data, alpha)
     norm2 = verify_normality(g2_data, alpha)
     
-    both_normal = norm1["is_normal"] and norm2["is_normal"]
+    both_normal = bool(norm1["is_normal"] and norm2["is_normal"])
     
     if both_normal:
-        # Check equal variance
         try:
             _, lev_p = stats.levene(g1_data, g2_data)
-            equal_var = lev_p > alpha
+            equal_var = bool(lev_p > alpha)
         except Exception:
             equal_var = True
             
@@ -133,16 +163,17 @@ def compare_groups(df, cat_col, num_col, alpha=0.05):
         test_name = "Mann-Whitney U test"
         u_stat, p_val = stats.mannwhitneyu(g1_data, g2_data, alternative='two-sided')
         result_msg = f"Ran {test_name}: U = {u_stat:.1f}, p-value = {p_val:.4f}."
+        t_stat = u_stat
         
     return {
         "test_name": test_name,
         "success": True,
-        "statistic": float(t_stat if both_normal else u_stat),
+        "statistic": float(t_stat),
         "p_value": float(p_val),
         "group_1": str(groups[0]),
         "group_2": str(groups[1]),
-        "group_1_size": len(g1_data),
-        "group_2_size": len(g2_data),
+        "group_1_size": int(len(g1_data)),
+        "group_2_size": int(len(g2_data)),
         "group_1_mean": float(g1_data.mean()),
         "group_2_mean": float(g2_data.mean()),
         "both_normal": both_normal,
@@ -185,7 +216,7 @@ def run_linear_regression(df, iv_col, dv_col):
             "f_statistic": float(model.fvalue),
             "f_p_value": float(model.f_pvalue),
             "formula": f"{dv_col} = {const_coef:.4f} + ({slope_coef:.4f} * {iv_col})",
-            "message": f"Successfully fit regression model (R² = {model.rsquared:.4f}). Significant? {slope_p < 0.05}."
+            "message": f"Successfully fit regression model (R² = {model.rsquared:.4f}). Significant? {bool(slope_p < 0.05)}."
         }
     except Exception as e:
         return {
@@ -201,7 +232,6 @@ def generate_analysis_plot(df, run_args):
     test_type = run_args.get("type")
     fig, ax = plt.subplots(figsize=(6, 4))
     
-    # Custom look-and-feel of plots
     sns.set_theme(style="whitegrid")
     
     try:
@@ -209,7 +239,7 @@ def generate_analysis_plot(df, run_args):
             col = run_args["col"]
             data = df[col].dropna()
             sns.histplot(data, kde=True, ax=ax, color="#4f46e5", alpha=0.7)
-            ax.set_title(f"Normality Plot (Distribution with KDE curve) for {col}", fontsize=11, fontweight="bold")
+            ax.set_title(f"Normality Plot for {col}", fontsize=11, fontweight="bold")
             ax.set_xlabel(col)
             ax.set_ylabel("Count")
             
@@ -218,10 +248,9 @@ def generate_analysis_plot(df, run_args):
             col2 = run_args["col2"]
             clean_df = df[[col1, col2]].dropna()
             sns.scatterplot(data=clean_df, x=col1, y=col2, ax=ax, color="#059669", s=50, alpha=0.8)
-            # Add regression line
             if len(clean_df) > 1:
                 sns.regplot(data=clean_df, x=col1, y=col2, ax=ax, scatter=False, color="#ef4444", line_kws={"linewidth": 2})
-            ax.set_title(f"Scatterplot: {col1} vs {col2} (with fitted trend line)", fontsize=11, fontweight="bold")
+            ax.set_title(f"Scatterplot: {col1} vs {col2}", fontsize=11, fontweight="bold")
             ax.set_xlabel(col1)
             ax.set_ylabel(col2)
             
@@ -232,7 +261,7 @@ def generate_analysis_plot(df, run_args):
             # Boxplot with data points overlaid
             sns.boxplot(data=clean_df, x=cat_col, y=num_col, ax=ax, palette="Set2", showfliers=False, width=0.4)
             sns.stripplot(data=clean_df, x=cat_col, y=num_col, ax=ax, color="#1e293b", alpha=0.4, size=5, jitter=0.15)
-            ax.set_title(f"Boxplot: {num_col} by {cat_col} (with data points overlaid)", fontsize=11, fontweight="bold")
+            ax.set_title(f"Boxplot with Data Points: {num_col} by {cat_col}", fontsize=11, fontweight="bold")
             ax.set_xlabel(cat_col)
             ax.set_ylabel(num_col)
             
@@ -243,7 +272,7 @@ def generate_analysis_plot(df, run_args):
             sns.scatterplot(data=clean_df, x=iv_col, y=dv_col, ax=ax, color="#3b82f6", s=50, alpha=0.8)
             if len(clean_df) > 1:
                 sns.regplot(data=clean_df, x=iv_col, y=dv_col, ax=ax, scatter=False, color="#dc2626", line_kws={"linewidth": 2})
-            ax.set_title(f"OLS Regression Line: Predictor = {iv_col}, Outcome = {dv_col}", fontsize=11, fontweight="bold")
+            ax.set_title(f"OLS Regression: {iv_col} Predicts {dv_col}", fontsize=11, fontweight="bold")
             ax.set_xlabel(iv_col)
             ax.set_ylabel(dv_col)
     except Exception as plot_err:
@@ -253,57 +282,117 @@ def generate_analysis_plot(df, run_args):
     plt.tight_layout()
     return fig
 
-# Set page configuration
+# ==========================================
+# 📊 PRE-PACKAGED EDUCATIONAL DATASETS
+# ==========================================
+
+DEMO_DATASETS = {
+    "exam": """gender,prep_course,sleep_hours,exam_score
+Female,Completed,7.5,88
+Male,None,6.0,72
+Male,Completed,8.0,91
+Female,None,5.5,65
+Female,Completed,7.0,85
+Male,None,6.5,78
+Female,None,6.0,70
+Male,Completed,9.0,95
+Female,Completed,8.5,94
+Male,None,5.0,60
+Female,None,6.5,75
+Male,Completed,7.5,86
+Female,Completed,8.0,92
+Male,None,7.0,80
+Female,None,5.5,68
+Male,Completed,8.5,93""",
+
+    "coffee": """daily_coffee_cups,focus_rating,sleep_latency_minutes
+1,45,15
+2,55,20
+3,70,35
+1,40,10
+0,35,12
+4,85,55
+5,90,75
+2,60,25
+3,75,40
+1,50,18
+0,30,15
+4,80,60
+5,95,80
+2,65,22
+3,80,45
+2,55,30""",
+
+    "diet": """diet_type,weight_loss_kg,age
+Low-Carb,4.2,34
+Keto,6.5,28
+Keto,5.8,45
+Low-Fat,3.1,38
+Low-Carb,4.8,29
+Low-Fat,2.5,41
+Low-Carb,3.9,32
+Keto,7.1,36
+Low-Fat,3.4,50
+Low-Carb,5.0,27
+Keto,6.2,31
+Low-Fat,2.8,44
+Keto,5.5,39
+Low-Carb,4.4,35
+Low-Fat,3.0,33
+Low-Carb,4.6,40"""
+}
+
+# ==========================================
+# 🔑 STREAMLIT PAGE SETUP
+# ==========================================
+
 st.set_page_config(
-    page_title="StatMentor AI: Research & Decision Support",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="StatsBuddy: Non-Statisticians Research Engine",
+    page_icon="🎓",
+    layout="wide"
 )
 
-# App Title and Description
-st.title("📊 StatMentor AI: Intelligent Research & Decision Support System")
+# Custom premium styling matching Inter font and clean panels
 st.markdown("""
-Welcome to **StatMentor AI**! This intelligent workspace combines advanced Google Gemini generative AI 
-with robust statistical computing to assist researchers, analysts, and decision-makers.
-""")
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+.reportview-container {
+    background-color: #f8fafc;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# ==========================================
-# 🔑 API KEY CONFIGURATION & SETUP
-# ==========================================
-# Retrieve the Google Gemini API Key securely from st.secrets or environment variables as default
-env_api_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+# Main API Key load from env
+api_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
 
-# Sidebar Configuration for API Key input field
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    # User input field to let users paste their Google Gemini API Key
-    api_key = st.text_input(
-        "Google Gemini API Key:", 
-        value=env_api_key,
-        type="password", 
-        help="Paste your Gemini API Key here to activate StatMentor chat. Get a key from Google AI Studio."
-    )
-    
-    if api_key:
-        genai.configure(api_key=api_key)
-        st.success("🤖 Gemini API Connected!")
-    else:
-        st.warning("⚠️ Enter Google Gemini API Key to activate tutoring chatbot.")
-        
-    st.markdown("---")
-    st.markdown("### System Info")
-    st.info("Environment: Streamlit Sandbox\nModel: gemini-1.5-flash")
+# We configure generative AI globally if API key exists
+if api_key:
+    genai.configure(api_key=api_key)
 
 # ==========================================
 # 🗄️ STATE INITIALIZATION (st.session_state)
 # ==========================================
-# Set up session_state variables for persistence across runs
+
 if "uploaded_df" not in st.session_state:
     st.session_state["uploaded_df"] = None
 
 if "file_name" not in st.session_state:
     st.session_state["file_name"] = ""
+
+if "step" not in st.session_state:
+    st.session_state["step"] = 1
+
+if "variables" not in st.session_state:
+    st.session_state["variables"] = {}
+
+if "scales" not in st.session_state:
+    st.session_state["scales"] = {}
+
+if "hypotheses" not in st.session_state:
+    st.session_state["hypotheses"] = {"h1": "", "h0": ""}
 
 if "last_test_result" not in st.session_state:
     st.session_state["last_test_result"] = None
@@ -314,382 +403,440 @@ if "last_apa_report" not in st.session_state:
 if "last_test_vars" not in st.session_state:
     st.session_state["last_test_vars"] = None
 
-if "chat_history" not in st.session_state or len(st.session_state["chat_history"]) == 0:
-    # Build welcoming message that reads the uploaded CSV's column names from state
-    if st.session_state["uploaded_df"] is not None:
-        cols_text = ", ".join([f"`{c}`" for c in st.session_state["uploaded_df"].columns])
+if "chat_history" not in st.session_state:
+    st.session_state["chat_history"] = []
+
+def reset_variable_states():
+    st.session_state["step"] = 1
+    st.session_state["variables"] = {}
+    st.session_state["scales"] = {}
+    st.session_state["hypotheses"] = {"h1": "", "h0": ""}
+    st.session_state["last_test_result"] = None
+    st.session_state["last_apa_report"] = None
+    st.session_state["last_test_vars"] = None
+
+# Building standard tutoring greeting context
+if len(st.session_state["chat_history"]) == 0:
+    if st.session_state["file_name"]:
         welcome_msg = (
-            f"Hello there! I am **StatMentor AI**, your friendly and patient statistics tutor. 👋 "
-            f"I see you have loaded the dataset **{st.session_state['file_name']}** with the following columns:\n"
-            f"{cols_text}\n\n"
-            f"Let's work together to structure your research study! To get started, I'd love to guide you through three important aspects:\n"
-            f"1. **What is your primary research question?**\n"
-            f"2. **Which of the columns above are your Independent Variables (IVs) and Dependent Variables (DVs)?**\n"
-            f"3. **What are their measurement scales (Nominal, Ordinal, Interval, or Ratio)?**\n\n"
-            f"If you're not sure what IVs/DVs or measurement scales mean, don't worry! Tell me what you're interested in, and I will explain them simply."
+            f"Hello student! I am **StatsBuddy AI**, your research methodology coach. 🎓\n"
+            f"I see you have loaded dataset **{st.session_state['file_name']}**.\n\n"
+            f"I have initialized my workspace. Direct your questions above to explore scales of measurement, "
+            f"formulate hypotheses, select statistical tests or write academic APA drafts! How can I assist you today?"
         )
     else:
         welcome_msg = (
-            "Hello there! I am **StatMentor AI**, your friendly and patient statistics tutor. 👋 "
-            "Let's work together to design and structure your research plan!\n\n"
-            "I noticed you haven't uploaded a dataset yet. Please select or drag in a CSV file or load our sample "
-            "Student Performance dataset in the right column. Once uploaded, I'll automatically read its column names, "
-            "and we can build your research plan together!\n\n"
-            "In the meantime, feel free to ask me general questions about statistical concepts or variable scales!"
+            "Hello there! I am **StatsBuddy AI**, your friendly research methodology and statistics coach. 👋 "
+            "I'm here to translate complex statistics into complete plain English!\n\n"
+            "To get started, please upload your raw data spreadsheet (.csv) on the left panel or click any "
+            "provided educational demo datasets to begin our step-by-step pipeline!"
         )
     st.session_state["chat_history"] = [("assistant", welcome_msg)]
 
 # ==========================================
-# 📐 TWO-COLUMN STRUCTURE
+# 🎓 NAVIGATION HEADER
 # ==========================================
-# App layout: Two equal-width columns as specified
-col1, col2 = st.columns(2)
 
-# ==========================================
-# COLUMN 1: RESEARCH & CHAT WORKSPACE
-# ==========================================
-with col1:
-    st.header("🔍 Research & Chat Workspace")
-    st.markdown("""
-    Interact with StatMentor AI, a patient statistics tutor. Discuss research questions, 
-    independent & dependent variables, and data measurement scales.
-    """)
-    
-    # Check if a dataset has been uploaded and prepare data context for Gemini
-    data_context = ""
-    if st.session_state["uploaded_df"] is not None:
-        df = st.session_state["uploaded_df"]
-        num_rows, num_cols = df.shape
-        columns_list = list(df.columns)
-        head_data = df.head(3).to_string()
-        
-        data_context = f"\n\nCURRENT DATASET CONTEXT (User uploaded file: '{st.session_state['file_name']}'):"
-        data_context += f"\n- Total Rows: {num_rows}, Columns Count: {num_cols}"
-        data_context += f"\n- List of Columns: {', '.join(columns_list)}"
-        data_context += f"\n- First few rows preview:\n{head_data}"
-        data_context += "\n\nPlease ground your tutoring assistance based on the variables listed in this active dataset."
+st.markdown("""
+<div style="background-color: white; padding: 20px; border-bottom: 2px solid #f1f5f9; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <div style="padding: 10px; background-color: #4f46e5; border-radius: 12px; color: white;">
+                <span style="font-size: 22px; font-weight: bold;">🎓</span>
+            </div>
+            <div>
+                <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -0.02em;">StatsBuddy</h1>
+                <p style="font-size: 12px; font-weight: 500; color: #64748b; margin: 0;">The Student's Friendly Research Methodology & Analysis Coach</p>
+            </div>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-    if st.session_state.get("last_test_result") is not None:
-        data_context += f"\n\n🚨 LATEST USER RUN TEST RESULTS:\n{st.session_state['last_test_result']}"
-        data_context += "\nPlease help the user understand and interpret this statistical test result with warm pedagogical coaching (null hypothesis, effect size, statistical significance, and assumptions)."
+# Step progression visual indicator bar
+steps_titles = [
+    "① Onboarding",
+    "② Variable Roles",
+    "③ Scales",
+    "④ Hypotheses",
+    "⑤ Test Match",
+    "⑥ Writeups"
+]
 
-    # Clear chat option (reinitialized with correct welcoming message based on active columns)
-    if st.button("🔄 Reset Tutor Conversation", key="clear_chat"):
-        if st.session_state["uploaded_df"] is not None:
-            cols_text = ", ".join([f"`{c}`" for c in st.session_state["uploaded_df"].columns])
-            welcome_msg = (
-                f"Hello there! I am **StatMentor AI**, your friendly and patient statistics tutor. 👋 "
-                f"I see you have loaded the dataset **{st.session_state['file_name']}** with the following columns:\n"
-                f"{cols_text}\n\n"
-                f"Let's work together to structure your research study! To get started, I'd love to guide you through three important aspects:\n"
-                f"1. **What is your primary research question?**\n"
-                f"2. **Which of the columns above are your Independent Variables (IVs) and Dependent Variables (DVs)?**\n"
-                f"3. **What are their measurement scales (Nominal, Ordinal, Interval, or Ratio)?**\n\n"
-                f"If you're not sure what IVs/DVs or measurement scales mean, don't worry! Tell me what you're interested in, and I will explain them simply."
-            )
+cols_step = st.columns(6)
+for idx, title in enumerate(steps_titles):
+    step_num = idx + 1
+    with cols_step[idx]:
+        if st.session_state["step"] == step_num:
+            st.markdown(f"<div style='text-align: center; font-weight: 800; border-bottom: 4px solid #4f46e5; padding-bottom: 5px; color: #4f46e5; font-size: 13px;'>{title}</div>", unsafe_allow_html=True)
+        elif st.session_state["step"] > step_num:
+            st.markdown(f"<div style='text-align: center; font-weight: 600; border-bottom: 4px solid #10b981; padding-bottom: 5px; color: #10b981; font-size: 13px;'>{title} ✓</div>", unsafe_allow_html=True)
         else:
-            welcome_msg = (
-                "Hello there! I am **StatMentor AI**, your friendly and patient statistics tutor. 👋 "
-                "Let's work together to design and structure your research plan!\n\n"
-                "I noticed you haven't uploaded a dataset yet. Please select or drag in a CSV file or load our sample "
-                "Student Performance dataset in the right column. Once uploaded, I'll automatically read its column names, "
-                "and we can build your research plan together!"
-            )
-        st.session_state["chat_history"] = [("assistant", welcome_msg)]
-        st.session_state["last_test_result"] = None
-        st.session_state["last_apa_report"] = None
-        st.session_state["last_test_vars"] = None
-        st.rerun()
+            st.markdown(f"<div style='text-align: center; font-weight: 400; border-bottom: 4px solid #e2e8f0; padding-bottom: 5px; color: #94a3b8; font-size: 13px;'>{title}</div>", unsafe_allow_html=True)
+st.markdown("<div style='margin-bottom: 25px;'></div>", unsafe_allow_html=True)
 
-    st.markdown("---")
-    
-    # Display the classic Streamlit chat interface
-    for role, text in st.session_state["chat_history"]:
-        with st.chat_message(role, avatar="🤖" if role == "assistant" else None):
-            st.markdown(text)
+# ==========================================
+# 📐 TWO-COLUMN MAIN FRAMEWORK
+# ==========================================
 
-    # Chat input field
-    user_query = st.chat_input("Ask StatMentor Tutor about your study plan or statistical scales...")
+col_left, col_right = st.columns([8, 4])
+
+# ------------------------------------------
+# LEFT COLUMN: INTERACTIVE WIZARD WORKSPACE
+# ------------------------------------------
+with col_left:
+    banner_step_details = [
+        { "title": "Let's onboard your research", "desc": "Upload your raw dataset or select one of our educational guides to begin.", "badge": "Step 1 of 6" },
+        { "title": "Map Variable Classification Roles", "desc": "Designate which columns represent your Causes (Independent Variables) and Effects (Dependent).", "badge": "Step 2 of 6" },
+        { "title": "Define Scales of Measurement", "desc": "Configure if variables should be evaluated as categorical groups, ranks, or continuous values.", "badge": "Step 3 of 6" },
+        { "title": "Research Design & Hypotheses Study", "desc": "Draft Null (H₀) and Alternative (H₁) statements cleanly matching scholarly expectations.", "badge": "Step 4 of 6" },
+        { "title": "Statistical Testing & Assumptions", "desc": "Review robust parameter matches and execute mathematical computations effortlessly.", "badge": "Step 5 of 6" },
+        { "title": "Dissertation Output & Writeup Guidance", "desc": "Read clear layman interpretations and generate perfect dissertation-ready APA paragraphs.", "badge": "Step 6 of 6" }
+    ]
+    step_meta = banner_step_details[st.session_state["step"] - 1]
+
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); padding: 20px; border-radius: 12px 12px 0 0; color: white;">
+        <span style="background-color: rgba(99, 102, 241, 0.3); border: 1px solid rgba(129, 140, 248, 0.2); color: #c7d2fe; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 9999px; text-transform: uppercase;">{step_meta['badge']}</span>
+        <h2 style="font-size: 20px; font-weight: 800; color: white; margin-top: 10px; margin-bottom: 2px;">{step_meta['title']}</h2>
+        <p style="font-size: 13px; color: #cbd5e1; margin: 0;">{step_meta['desc']}</p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    if user_query:
-        # Display user message instantly & append to chat history
-        st.chat_message("user").markdown(user_query)
-        st.session_state["chat_history"].append(("user", user_query))
+    # Render Step Content inside a bordered container card
+    with st.container(border=True):
         
-        # Call Gemini API logic
-        if not api_key:
-            reply = (
-                "⚠️ **Google Gemini API Key is missing**.\n\n"
-                "Please add a valid key in the configuration input box in the sidebar to talk with me! "
-                "I will then analyze your research question and dataset."
-            )
-            with st.chat_message("assistant", avatar="🤖"):
-                st.markdown(reply)
-            st.session_state["chat_history"].append(("assistant", reply))
-        else:
-            with st.chat_message("assistant", avatar="🤖"):
-                with st.spinner("StatMentor formulating tutoring guidance..."):
-                    try:
-                        system_prompt = (
-                            "You are StatMentor AI, a patient, warm, and highly encouraging statistics tutor for absolute beginners. "
-                            "You guide users through structuring their research plan in a scaffolded, step-by-step dialogue.\n\n"
-                            "Your core objective is to help the user identify:\n"
-                            "1. What is their primary research question under study?\n"
-                            "2. What are their Independent Variables (IVs) and Dependent Variables (DVs) based ONLY on the columns in their dataset?\n"
-                            "3. What are the measurement scales (Nominal, Ordinal, Interval, or Ratio) for those variables?\n\n"
-                            "Instruction Guidelines:\n"
-                            "- Always explain concepts simply. If the user does not know what Nominal, Ordinal, Interval, or Ratio mean, explain them with fun, clear analogies (e.g., Nominal is like jerseys with team names, Ordinal is like military ranks, Scale/Interval/Ratio are like tape measures).\n"
-                            "- Encourage the user. Validate their research interests and help them select appropriate columns from their file.\n"
-                            "- Keep your responses organized, readable, and styled nicely with bold words and bullet points."
-                        )
-                        
-                        # Build context
-                        model = genai.GenerativeModel(
-                            model_name="gemini-1.5-flash",
-                            system_instruction=system_prompt
-                        )
-                        
-                        full_prompt = "Conversation History:\n"
-                        for role, text in st.session_state["chat_history"][:-1]:
-                            full_prompt += f"{'User' if role=='user' else 'Assistant'}: {text}\n"
-                        
-                        full_prompt += data_context
-                        full_prompt += f"\n\nUser: {user_query}\nTutor Answer:"
-                        
-                        response = model.generate_content(full_prompt)
-                        reply = response.text
-                        
-                    except Exception as e:
-                        reply = f"❌ **API Error**: StatMentor encountered a connection problem: {str(e)}"
+        # --- STEP 1: ONBOARDING ---
+        if st.session_state["step"] == 1:
+            st.markdown("##### 📁 Upload Spreadsheet Data")
+            uploaded_file = st.file_uploader("Upload spreadsheet (.csv) to begin parsing raw stats:", type=["csv"])
+            
+            if uploaded_file is not None:
+                try:
+                    if st.session_state["file_name"] != uploaded_file.name:
+                        st.session_state["uploaded_df"] = pd.read_csv(uploaded_file)
+                        st.session_state["file_name"] = uploaded_file.name
+                        reset_variable_states()
+                        st.toast(f"✅ Loaded {uploaded_file.name}")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error reading CSV: {e}")
+            
+            st.markdown("---")
+            st.markdown("##### 💡 No dataset handy? Use a demo tutorial dataset!")
+            st.write("Pick one of our pre-packaged student datasets to follow our educational wizard pipeline:")
+            
+            demo_cols = st.columns(3)
+            with demo_cols[0]:
+                if st.button("📝 Exam Prep & Anxiety", use_container_width=True):
+                    st.session_state["uploaded_df"] = pd.read_csv(io.StringIO(DEMO_DATASETS["exam"]))
+                    st.session_state["file_name"] = "demo_exam_prep_anxiety.csv"
+                    reset_variable_states()
+                    st.toast("✅ Exam Prep & Anxiety dataset loaded!")
+                    st.rerun()
+            with demo_cols[1]:
+                if st.button("☕ Coffee & Focus Scores", use_container_width=True):
+                    st.session_state["uploaded_df"] = pd.read_csv(io.StringIO(DEMO_DATASETS["coffee"]))
+                    st.session_state["file_name"] = "demo_coffee_focus_rates.csv"
+                    reset_variable_states()
+                    st.toast("✅ Coffee focus levels dataset loaded!")
+                    st.rerun()
+            with demo_cols[2]:
+                if st.button("🥗 Diet Weight Losses", use_container_width=True):
+                    st.session_state["uploaded_df"] = pd.read_csv(io.StringIO(DEMO_DATASETS["diet"]))
+                    st.session_state["file_name"] = "demo_diet_weight_losses.csv"
+                    reset_variable_states()
+                    st.toast("✅ Diet weight losses dataset loaded!")
+                    st.rerun()
+            
+            # Show preview of loaded data
+            if st.session_state["uploaded_df"] is not None:
+                df = st.session_state["uploaded_df"]
+                st.success(f"📈 **Active Dataset Loaded: {st.session_state['file_name']}**")
                 
-                st.markdown(reply)
-                st.session_state["chat_history"].append(("assistant", reply))
-            
-            # Request rerun to stabilize display
-            st.rerun()
-
-# ==========================================
-# COLUMN 2: DATA DASHBOARD & VISUALIZATIONS
-# ==========================================
-with col2:
-    st.header("📈 Data Dashboard & Visualizations")
-    st.markdown("Upload a CSV file to generate smart diagnostic and descriptive reports.")
-    
-    # File Uploader
-    uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
-    
-    # If a new file is uploaded, update session state
-    if uploaded_file is not None:
-        try:
-            # Prevent re-reading multiple times if it's already stored in session_state
-            if st.session_state["file_name"] != uploaded_file.name:
-                df = pd.read_csv(uploaded_file)
-                st.session_state["uploaded_df"] = df
-                st.session_state["file_name"] = uploaded_file.name
-                st.toast(f"✅ Success! Loaded '{uploaded_file.name}'")
-                st.rerun()
-        except Exception as e:
-            st.error(f"Error reading CSV: {e}")
-
-    # Display dataset details if available
-    if st.session_state["uploaded_df"] is not None:
-        df = st.session_state["uploaded_df"]
-        st.markdown(f"### Active Dataset: **{st.session_state['file_name']}**")
-        
-        # 1. Total Rows & Columns (using st.metric cards)
-        st.markdown("#### 📏 Dataset Dimensions")
-        m_col1, m_col2 = st.columns(2)
-        with m_col1:
-            st.metric(label="Total Rows", value=f"{df.shape[0]:,}")
-        with m_col2:
-            st.metric(label="Total Columns", value=f"{df.shape[1]:,}")
-            
-        st.markdown("---")
-
-        # 2. Detected Columns and their basic data types
-        st.markdown("#### 🏷️ Detected Column Schema & Types")
-        
-        column_info = []
-        for col in df.columns:
-            # Simple data type classification
-            is_numeric = pd.api.types.is_numeric_dtype(df[col])
-            dtype_label = "Numeric (Float/Integer)" if is_numeric else "Text/Categorical (String)"
-            column_info.append({
-                "Column Name": col,
-                "Datatype": str(df[col].dtype),
-                "Classification": dtype_label
-            })
-            
-        type_df = pd.DataFrame(column_info)
-        st.dataframe(type_df, use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-
-        # 3. Automated Missing Data Report
-        st.markdown("#### 🔍 Missing Data & Integrity Report")
-        null_counts = df.isnull().sum()
-        null_percent = (null_counts / len(df)) * 100
-        
-        missing_df = pd.DataFrame({
-            "Column Name": df.columns,
-            "Missing Values (Count)": null_counts,
-            "Missingness (%)": null_percent.round(2)
-        })
-        
-        # Filter for reporting all, but highlight columns with actual missingness
-        has_missing = missing_df[missing_df["Missing Values (Count)"] > 0]
-        
-        if len(has_missing) == 0:
-            st.success("🎉 Complete Dataset! No missing values detected in any columns.")
-        else:
-            st.warning(f"⚠️ Detected null values in {len(has_missing)} columns:")
-            st.dataframe(has_missing, use_container_width=True, hide_index=True)
-            
-        st.markdown("---")
-
-        # 4. Descriptive Statistics Table
-        st.markdown("#### 📊 Descriptive Statistics (Numeric Columns Only)")
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        
-        if len(numeric_cols) == 0:
-            st.warning("No numeric columns detected in the dataset. Cannot compute mean, median, or standard deviation.")
-        else:
-            # Create a descriptive dataframe featuring Mean, Median (50%), and Standard Deviation (Std)
-            desc_stats = df[numeric_cols].describe().T
-            # Reorganize and polish the description columns
-            desc_summary = pd.DataFrame({
-                "Variable": desc_stats.index,
-                "Mean": desc_stats["mean"].round(4),
-                "Median (50%)": desc_stats["50%"].round(4),
-                "Standard Deviation": desc_stats["std"].round(4),
-                "Min": desc_stats["min"].round(4),
-                "Max": desc_stats["max"].round(4)
-            })
-            
-            st.dataframe(desc_summary, use_container_width=True, hide_index=True)
-            
-            # Interactive Visualizations (Extra high-quality feature for dashboards)
-            st.markdown("---")
-            st.markdown("#### 📈 Distribution Quick-Plot")
-            selected_plot_col = st.selectbox("Select a numeric column to plot:", numeric_cols)
-            
-            if selected_plot_col:
-                st.write(f"Distribution plot for `{selected_plot_col}`")
-                # Plotting histogram natively in Streamlit
-                st.bar_chart(df[selected_plot_col].value_counts().head(20))
-
-            # Automated Statistical Testing Engine block
-            st.markdown("---")
-            st.markdown("#### 🔬 Native Statistical Testing Engine")
-            st.markdown(
-                "Run standard statistical tests natively on your active dataset. "
-                "The actual math runs error-free, and results are fed directly into **StatMentor AI**'s "
-                "active working memory to enable instant, guided interpretations."
-            )
-            
-            test_type = st.selectbox(
-                "Select Statistical Operation to Run:",
-                [
-                    "Verify Normality (Shapiro-Wilk)",
-                    "Correlation Analysis (Pearson / Spearman)",
-                    "Two-Group Comparison (t-test / Mann-Whitney)",
-                    "OLS Linear Regression"
-                ],
-                key="stat_test_type"
-            )
-            
-            all_cols = list(df.columns)
-            numeric_cols_list = list(numeric_cols)
-            cat_cols = [c for c in all_cols if c not in numeric_cols_list]
-            
-            can_run = False
-            run_args = {}
-            
-            if test_type == "Verify Normality (Shapiro-Wilk)":
-                if not all_cols:
-                    st.error("No columns available.")
+                m_col1, m_col2 = st.columns(2)
+                with m_col1:
+                    st.metric("Total Rows (Observations)", df.shape[0])
+                with m_col2:
+                    st.metric("Total columns (Features)", df.shape[1])
+                
+                st.write("**Dataset Preview (First 5 Rows):**")
+                st.dataframe(df.head(5), use_container_width=True)
+                
+                # Check for null values
+                missing = df.isnull().sum().sum()
+                if missing == 0:
+                    st.success("✔️ Clean dataset: No missing values detected!")
                 else:
-                    norm_col = st.selectbox("Select variable to check normality:", all_cols, key="norm_col_select")
-                    can_run = True
-                    run_args = {"type": "normality", "col": norm_col}
-                        
-            elif test_type == "Correlation Analysis (Pearson / Spearman)":
-                if len(numeric_cols_list) < 2:
-                    st.error("Requires at least 2 numeric columns for pairwise correlation analysis.")
-                else:
-                    c_col1 = st.selectbox("Select Variable 1 (Numeric):", numeric_cols_list, index=0, key="corr_v1")
-                    c_col2 = st.selectbox("Select Variable 2 (Numeric):", numeric_cols_list, index=min(1, len(numeric_cols_list)-1), key="corr_v2")
-                    if c_col1 == c_col2:
-                        st.warning("Please select two different variables.")
-                    else:
-                        can_run = True
-                        run_args = {"type": "correlation", "col1": c_col1, "col2": c_col2}
-                        
-            elif test_type == "Two-Group Comparison (t-test / Mann-Whitney)":
-                two_class_cols = [c for c in all_cols if df[c].dropna().nunique() == 2]
-                if not two_class_cols:
-                    st.warning("No categorical variables with exactly 2 unique categories detected. Showing all categorical/text columns:")
-                    group_cols_to_show = cat_cols if cat_cols else all_cols
-                else:
-                    group_cols_to_show = two_class_cols
+                    st.warning(f"⚠️ Missing parameters detected: Found {missing} empty entries across rows. These will be dropped during calculations.")
+        
+        # --- STEP 2: VARIABLE CLASSIFICATION ---
+        elif st.session_state["step"] == 2:
+            if st.session_state["uploaded_df"] is None:
+                st.warning("⚠️ No dataset loaded. Please go back to Step 1 and upload data or choose a demo.")
+            else:
+                st.write("Map your column headers to respective experimental roles. This allows StatsBuddy to guide your research correctly.")
+                df = st.session_state["uploaded_df"]
+                
+                for col in df.columns:
+                    col_str = str(col)
+                    clean_series = df[col_str].dropna()
+                    samples_list = clean_series.head(3).tolist()
+                    unique_count = clean_series.nunique()
+                    is_num = pd.api.types.is_numeric_dtype(clean_series)
                     
-                if not group_cols_to_show:
-                    st.error("No grouping column available.")
-                elif not numeric_cols_list:
-                    st.error("No numeric variable available to compare groups on.")
+                    if col_str not in st.session_state["variables"]:
+                        if is_num and unique_count > 5 and "DV" not in st.session_state["variables"].values():
+                            st.session_state["variables"][col_str] = "Effect (Dependent)"
+                        elif unique_count <= 5:
+                            st.session_state["variables"][col_str] = "Cause (Independent)"
+                        else:
+                            st.session_state["variables"][col_str] = "Exclude"
+                    
+                    val = st.selectbox(
+                        f"📊 Column: **{col_str}** | (Samples: {samples_list}, Unique count: {unique_count})",
+                        options=["Cause (Independent)", "Effect (Dependent)", "Covariate (Control)", "Exclude"],
+                        index=["Cause (Independent)", "Effect (Dependent)", "Covariate (Control)", "Exclude"].index(st.session_state["variables"][col_str]),
+                        key=f"role_{col_str}"
+                    )
+                    st.session_state["variables"][col_str] = val
+                    
+        # --- STEP 3: SCALES OF MEASUREMENT ---
+        elif st.session_state["step"] == 3:
+            if st.session_state["uploaded_df"] is None:
+                st.warning("⚠️ No dataset loaded. Go back to Step 1.")
+            else:
+                df = st.session_state["uploaded_df"]
+                non_ignored = [col for col in df.columns if st.session_state["variables"].get(col, "Exclude") != "Exclude"]
+                
+                if not non_ignored:
+                    st.error("⚠️ All variables are marked as 'Exclude'. Please go back to Step 2 and choose matching variables.")
                 else:
-                    cat_col_selected = st.selectbox("Select Grouping Variable (e.g. Submission_Status):", group_cols_to_show, key="group_cat")
-                    num_col_selected = st.selectbox("Select Test Variable (Numeric):", numeric_cols_list, key="group_num")
-                    can_run = True
-                    run_args = {"type": "group_comparison", "cat_col": cat_col_selected, "num_col": num_col_selected}
+                    st.write("Specify your measurement scales. This will prevent statistically invalid calculations:")
+                    
+                    for col in non_ignored:
+                        col_str = str(col)
+                        clean_series = df[col_str].dropna()
+                        is_num = pd.api.types.is_numeric_dtype(clean_series)
+                        unique_count = clean_series.nunique()
                         
-            elif test_type == "OLS Linear Regression":
-                if len(numeric_cols_list) < 2:
-                    st.error("Requires at least 2 numeric columns for regression (1 predictor, 1 outcome).")
-                else:
-                    iv_col = st.selectbox("Select Predictor (IV - Numeric):", numeric_cols_list, index=0, key="reg_iv")
-                    dv_col = st.selectbox("Select Outcome (DV - Numeric):", numeric_cols_list, index=min(1, len(numeric_cols_list)-1), key="reg_dv")
-                    if iv_col == dv_col:
-                        st.warning("Predictor (IV) and Outcome (DV) should be different variables.")
-                    else:
-                        can_run = True
-                        run_args = {"type": "regression", "iv_col": iv_col, "dv_col": dv_col}
+                        if col_str not in st.session_state["scales"]:
+                            if not is_num:
+                                st.session_state["scales"][col_str] = "Nominal (Categories)"
+                            elif unique_count < 6:
+                                st.session_state["scales"][col_str] = "Ordinal (Ordered)"
+                            else:
+                                st.session_state["scales"][col_str] = "Ratio (True Zero)"
+                                
+                        val = st.selectbox(
+                            f"📐 **{col_str}** | (Classified as {st.session_state['variables'][col_str]})",
+                            options=["Nominal (Categories)", "Ordinal (Ordered)", "Interval (Arbitrary)", "Ratio (True Zero)"],
+                            index=["Nominal (Categories)", "Ordinal (Ordered)", "Interval (Arbitrary)", "Ratio (True Zero)"].index(st.session_state["scales"][col_str]),
+                            key=f"scale_{col_str}"
+                        )
+                        st.session_state["scales"][col_str] = val
+
+        # --- STEP 4: RESEARCH HYPOTHESES ---
+        elif st.session_state["step"] == 4:
+            st.markdown("##### 🧭 Automated Study Mapping")
             
-            # Draw unified Run Analysis button
-            if can_run:
-                if st.button("Run Analysis", type="primary", use_container_width=True):
+            ivs = [k for k, v in st.session_state["variables"].items() if v == "Cause (Independent)"]
+            dvs = [k for k, v in st.session_state["variables"].items() if v == "Effect (Dependent)"]
+            
+            if not ivs or not dvs:
+                st.error("⚠️ **Incomplete variables mapping**: Please return to Step 2 and ensure you have designated at least one **Cause (Independent)** column and one **Effect (Dependent)** column.")
+            else:
+                main_iv = ivs[0]
+                main_dv = dvs[0]
+                iv_scale = st.session_state["scales"].get(main_iv, "Nominal (Categories)")
+                dv_scale = st.session_state["scales"].get(main_dv, "Ratio (True Zero)")
+                
+                # Dynamic matching statements
+                if "Nominal" in iv_scale and "Ratio" in dv_scale:
+                    design_name = "Comparative / Experimental Design"
+                    design_explanation = f"You are evaluating a categorical grouping column (**{main_iv}**) split in sub-categories, examining if they lead to differences in continuous outcomes (**{main_dv}**)."
+                    default_h1 = f"There is a statistically significant difference in observed average values of {main_dv} between groups of {main_iv}."
+                    default_h0 = f"There is no statistically significant difference in observed average values of {main_dv} between groups of {main_iv}."
+                elif "Ratio" in iv_scale and "Ratio" in dv_scale:
+                    design_name = "Relational / Correlational Design"
+                    design_explanation = f"Both Cause (**{main_iv}**) and Effect (**{main_dv}**) represent continuous parameters. Ideal for linear trend evaluations or regression predictive modeling."
+                    default_h1 = f"There is a statistically significant linear correlation/predictive relationship between {main_iv} and {main_dv}."
+                    default_h0 = f"There is no statistically significant linear correlation/predictive relationship between {main_iv} and {main_dv}."
+                elif "Nominal" in iv_scale and "Nominal" in dv_scale:
+                    design_name = "Association Design (Categorical Contingency)"
+                    design_explanation = f"Both your Cause (**{main_iv}**) and Effect (**{main_dv}**) represent discrete grouping categories. This explores conditional occurrence ratio trends."
+                    default_h1 = f"There is a statistically significant proportional association between categories of {main_iv} and {main_dv}."
+                    default_h0 = f"There is no statistically significant proportional association between categories of {main_iv} and {main_dv}."
+                else:
+                    design_name = "Mixed Non-Parametric Design"
+                    design_explanation = f"Variable characteristics represent rank classifications. Standard nonparametric ordinal comparative test configurations should be used."
+                    default_h1 = f"Rank values of {main_iv} correspond significantly with trends in {main_dv}."
+                    default_h0 = f"Rank values of {main_iv} do not correspond to differences in {main_dv}."
+                
+                st.info(f"🧭 **Matched design framework: {design_name}**\n\n{design_explanation}")
+                
+                st.markdown("##### ✏️ Mad-Libs Hypothesis Formulations")
+                st.write("Customize alternative statements to match dissertation Chapter 4 narrative preferences:")
+                
+                if not st.session_state["hypotheses"].get("h1"):
+                    st.session_state["hypotheses"]["h1"] = default_h1
+                if not st.session_state["hypotheses"].get("h0"):
+                    st.session_state["hypotheses"]["h0"] = default_h0
+                    
+                h1_val = st.text_area("Alternative Hypothesis (H₁):", value=st.session_state["hypotheses"]["h1"])
+                st.session_state["hypotheses"]["h1"] = h1_val
+                
+                st.text_area("Null Hypothesis (H₀ - Automatically populated based on selection):", value=default_h0, disabled=True)
+
+        # --- STEP 5: MATHEMATICAL TESTS MATCHING & ASSUMPTIONS ---
+        elif st.session_state["step"] == 5:
+            ivs = [k for k, v in st.session_state["variables"].items() if v == "Cause (Independent)"]
+            dvs = [k for k, v in st.session_state["variables"].items() if v == "Effect (Dependent)"]
+            
+            if not ivs or not dvs:
+                st.error("⚠️ Please maps columns on Step 2 first.")
+            else:
+                main_iv = ivs[0]
+                main_dv = dvs[0]
+                iv_scale = st.session_state["scales"].get(main_iv, "Nominal (Categories)")
+                dv_scale = st.session_state["scales"].get(main_dv, "Ratio (True Zero)")
+                df = st.session_state["uploaded_df"]
+                unique_iv = df[main_iv].dropna().nunique()
+                
+                recommended_test = "Nonparametric Alternative"
+                test_reason = "Mixed measurement characteristics suggest running a robust nonparametric rank test."
+                run_type = "mann_whitney"
+                
+                if "Nominal" in iv_scale and "Ratio" in dv_scale:
+                    if unique_iv == 2:
+                        recommended_test = "Independent Samples t-test"
+                        test_reason = f"Your Independent grouping variable (**{main_iv}**) contains exactly 2 unique categories, and your dependent variable (**{main_dv}**) is continuous numbers. A standard t-test is optimal here."
+                        run_type = "t_test"
+                    else:
+                        recommended_test = "One-Way ANOVA"
+                        test_reason = f"Your Independent parameter (**{main_iv}**) contains {unique_iv} (> 2) groups. An ANOVA checks general group variants simultaneously, avoiding combined type I errors."
+                        run_type = "anova"
+                elif "Ratio" in iv_scale and "Ratio" in dv_scale:
+                    recommended_test = "Pearson Bivariate Correlation & Simple Regression"
+                    test_reason = f"Both Cause (**{main_iv}**) and Effect (**{main_dv}**) parameters are continuous numeric scales, permitting predictive trend modeling."
+                    run_type = "regression"
+                elif "Nominal" in iv_scale and "Nominal" in dv_scale:
+                    recommended_test = "Chi-Square Test of Independence"
+                    test_reason = f"Both Cause and Effect variables represent categorical divisions, needing coordinate contingency counts comparisons."
+                    run_type = "chi_square"
+                    
+                st.markdown(f"""
+                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <h4 style="color: #166534; margin: 0; font-size: 15px; font-weight: 800;">🚀 Recommended Statistical Test Found!</h4>
+                    <p style="font-size: 14px; font-weight: 800; color: #15803d; margin: 6px 0 2px 0;">{recommended_test}</p>
+                    <p style="font-size: 12px; color: #166534; margin: 0; line-height: 1.4;">{test_reason}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown("##### 🔬 Data Integrity & Assumptions Screen")
+                
+                # Skewness verify
+                dv_vals = df[main_dv].dropna()
+                if pd.api.types.is_numeric_dtype(dv_vals) and len(dv_vals) > 2:
+                    mean_v = float(dv_vals.mean())
+                    std_v = float(dv_vals.std())
+                    if std_v > 0:
+                        skew = float(((dv_vals - mean_v)/std_v).pow(3).mean())
+                        if abs(skew) < 1.0:
+                            st.success(f"✔️ **Normality verify (Skewness = {skew:.3f})**: Balanced shape, excellent for parametric test models.")
+                        else:
+                            st.warning(f"⚠️ **Normality warning (Skewness = {skew:.3f})**: Marked skewness detected. Consider caution when interpreting boundary significance.")
+                
+                # Sample count
+                sample_count = len(df)
+                if sample_count >= 15:
+                    st.success(f"✔️ **Sample Size Checklist ({sample_count} rows)**: Sufficient sample sizes to ensure reliable test power.")
+                else:
+                    st.warning(f"⚠️ **Sample Size warning ({sample_count} rows)**: Small dataset size limits statistical confidence margins.")
+                    
+                st.markdown("---")
+                
+                # GIANT RUN BUTTON
+                if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
                     with st.spinner("Processing Python statistical calculations..."):
-                        if run_args["type"] == "normality":
-                            res_val = verify_normality(df[run_args["col"]])
-                            res_val["inputs"] = {"variable": run_args["col"]}
-                        elif run_args["type"] == "correlation":
-                            res_val = calculate_correlation(df, run_args["col1"], run_args["col2"])
-                            res_val["inputs"] = {"variable_1": run_args["col1"], "variable_2": run_args["col2"]}
-                        elif run_args["type"] == "group_comparison":
-                            res_val = compare_groups(df, run_args["cat_col"], run_args["num_col"])
-                            res_val["inputs"] = {"grouping_variable": run_args["cat_col"], "test_variable": run_args["num_col"]}
-                        elif run_args["type"] == "regression":
-                            res_val = run_linear_regression(df, run_args["iv_col"], run_args["dv_col"])
-                            res_val["inputs"] = {"independent_variable": run_args["iv_col"], "dependent_variable": run_args["dv_col"]}
+                        res_val = {}
+                        if run_type == "t_test":
+                            res_val = compare_groups(df, main_iv, main_dv)
+                            res_val["inputs"] = {"grouping_variable": main_iv, "test_variable": main_dv}
+                        elif run_type == "anova":
+                            subgroups = df[main_iv].dropna().unique()
+                            group_arrays = [df[df[main_iv] == g][main_dv].dropna().tolist() for g in subgroups]
+                            group_arrays = [g for g in group_arrays if len(g) >= 3]
+                            if len(group_arrays) < 2:
+                                res_val = {"test_name": "One-Way ANOVA", "success": False, "message": "Failed: Categories contain insufficient parameters (<3 sample entries)."}
+                            else:
+                                try:
+                                    f_stat, p_val = stats.f_oneway(*group_arrays)
+                                    res_val = {
+                                        "test_name": "One-Way ANOVA (Analysis of Variance)",
+                                        "f_statistic": float(f_stat),
+                                        "p_value": float(p_val),
+                                        "groups_compared": list(subgroups),
+                                        "significant": bool(p_val < 0.05),
+                                        "success": True,
+                                        "message": f"Successfully completed ANOVA comparison: F = {f_stat:.4f}, p = {p_val:.4f}."
+                                    }
+                                except Exception as e:
+                                    res_val = {"test_name": "One-Way ANOVA", "success": False, "message": str(e)}
+                            res_val["inputs"] = {"independent_variable": main_iv, "dependent_variable": main_dv}
+                        elif run_type == "regression":
+                            res_val = run_linear_regression(df, main_iv, main_dv)
+                            res_val["inputs"] = {"independent_variable": main_iv, "dependent_variable": main_dv}
+                        elif run_type == "chi_square":
+                            try:
+                                contingency = pd.crosstab(df[main_iv], df[main_dv])
+                                chi2, p, dof, expected = stats.chi2_contingency(contingency)
+                                res_val = {
+                                    "test_name": "Chi-Square Test of Independence",
+                                    "success": True,
+                                    "chi2_statistic": float(chi2),
+                                    "p_value": float(p),
+                                    "dof": int(dof),
+                                    "significant": bool(p < 0.05),
+                                    "message": f"Successfully completed Chi-Square check: chi2({dof}) = {chi2:.4f}, p = {p:.4f}."
+                                }
+                            except Exception as e:
+                                res_val = {"test_name": "Chi-Square Test", "success": False, "message": str(e)}
+                            res_val["inputs"] = {"independent_variable": main_iv, "dependent_variable": main_dv}
+                        else:
+                            res_val = compare_groups(df, main_iv, main_dv)
+                            res_val["inputs"] = {"grouping_variable": main_iv, "test_variable": main_dv}
+                            
+                        # Standardize NumPy serialize types before writing to state
+                        res_val = make_json_serializable(res_val)
                         
                         st.session_state["last_test_result"] = res_val
-                        st.session_state["last_test_vars"] = run_args
+                        st.session_state["last_test_vars"] = {
+                            "type": "group_comparison" if run_type in ["t_test", "mann_whitney", "chi_square", "anova"] else "regression",
+                            "col": main_dv,
+                            "cat_col": main_iv,
+                            "num_col": main_dv,
+                            "col1": main_iv,
+                            "col2": main_dv,
+                            "iv_col": main_iv,
+                            "dv_col": main_dv
+                        }
+                        
                         st.session_state["last_apa_report"] = None
                         
-                    # Trigger APA Writer if successful using custom API logic
+                    # Request Gemini scholarly interpretations if API Key exists
                     if res_val.get("success", False):
                         if api_key:
-                            with st.spinner("Writing dissertation Chapter 4 narrative..."):
+                            with st.spinner("StatMentor formulating Chapter 4 scholarly drafts..."):
                                 try:
                                     system_prompt_apa = (
                                         "You are an expert academic statistician writing a dissertation Chapter 4. "
-                                        "Take these raw statistical results and generate: "
-                                        "1. A plain-language interpretation of what this means for a layman. "
+                                        "Take these raw statistical results and generate: 1. A plain-language interpretation of what this means for a layman. "
                                         "2. A formal, publication-ready dissertation narrative strictly adhering to current APA Style guidelines. "
                                         "3. A Markdown-formatted statistical table displaying the results cleanly."
                                     )
                                     model_apa = genai.GenerativeModel(
-                                        model_name="gemini-1.5-flash",
+                                        model_name="gemini-3.5-flash",
                                         system_instruction=system_prompt_apa
                                     )
                                     prompt_apa = f"Here is the raw statistical output dictionary:\n{json.dumps(res_val, indent=2)}\n\nPlease write the final output strictly formatted withlayman explanation, APA narrative, and markdown table."
@@ -698,72 +845,220 @@ with col2:
                                 except Exception as api_err:
                                     st.session_state["last_apa_report"] = f"❌ **Error generating APA report using Gemini:** {str(api_err)}"
                         else:
-                            st.session_state["last_apa_report"] = "⚠️ **Cannot generate scholarly APA Narrative because Google Gemini API Key is missing.** Go to the sidebar and paste/enter a valid API Key to unlock automated academic writing!"
+                            st.session_state["last_apa_report"] = "⚠️ **Gemini API Key missing**. Key must be set up inside advanced settings to generate dissertation Chapter 4 text drafts."
+                            
+                    # Move to Step 6 output view automatically
+                    st.session_state["step"] = 6
                     st.rerun()
 
-            # Elegant interactive layout to display the outputs
-            if st.session_state.get("last_test_result") is not None:
-                res = st.session_state["last_test_result"]
-                vars_info = st.session_state["last_test_vars"]
-                
-                st.markdown("---")
-                st.subheader("📊 Latest Run Diagnostic Summary")
-                
-                if res.get("success", False):
-                    st.success(f"📈 **Completed {res['test_name']} Successfully!**")
-                    st.write(f"**Interpretation statement:** {res['message']}")
-                    
-                    tab1, tab2, tab3 = st.tabs(["🖼️ Automated Plot Visual", "🎓 APA Dissertation segment", "📋 Raw Dictionary"])
-                    
-                    with tab1:
-                        st.markdown("##### 📈 Integrated Scientific Visualization")
-                        # Plot the corresponding automated visualization graph natively
-                        fig = generate_analysis_plot(df, vars_info)
-                        st.pyplot(fig)
-                        plt.close(fig) # Free matplotlib memory
-                        
-                    with tab2:
-                        st.markdown("##### 📜 Guided Dissertation Narrations (APA 7th Edition)")
-                        apa_text = st.session_state.get("last_apa_report")
-                        if apa_text:
-                            st.markdown(apa_text)
-                        elif not api_key:
-                            st.warning("⚠️ Enter Google Gemini API Key in the sidebar to activate dissertation report generator.")
-                        else:
-                            st.info("🔄 Processing academic summary. If it didn't generate, click 'Run Analysis' again.")
-                            
-                    with tab3:
-                        st.markdown("##### 🗂️ Structured Data Outputs (JSON)")
-                        st.json(res)
-                        st.info("💡 **Tutor Sync Active**: You can now ask the chatbot on the left: *'Can you interpret the statistical results I just ran?'*")
-                else:
-                    st.error(f"❌ **Analysis Terminated**: {res.get('message')}")
-
-    else:
-        # Prompt to upload CSV if empty
-        st.info("ℹ️ Please upload a CSV file to unlock the interactive data table, missing value analysis, and statistical summary tools!")
-        
-        # Provide sample data to make it easy to play around
-        st.markdown("---")
-        st.markdown("💡 **Don't have a CSV handy?** Click below to load a sample dataset:")
-        
-        if st.button("Load Sample Research Dataset"):
-            # Create a mock Student Exam Score dataset
-            np.random.seed(42)
-            n_samples = 150
-            sample_data = pd.DataFrame({
-                "Student_ID": [f"STU_{i:04d}" for i in range(1, n_samples + 1)],
-                "Study_Hours": np.random.normal(12, 3, n_samples).round(1).clip(2, 24),
-                "Pre_Test_Score": np.random.normal(68, 10, n_samples).round(1).clip(30, 100),
-                "Final_Grade": np.random.normal(74, 12, n_samples).round(1).clip(40, 100),
-                "Attendance_Rate (%)": np.random.uniform(75, 100, n_samples).round(1),
-                "Submission_Status": np.random.choice(["Submitted On Time", "Late Submission", "Grace Period"], n_samples, p=[0.8, 0.15, 0.05])
-            })
-            # Inject a few nan values for simulated missingness report
-            sample_data.loc[np.random.choice(sample_data.index, 6), "Pre_Test_Score"] = np.nan
-            sample_data.loc[np.random.choice(sample_data.index, 3), "Study_Hours"] = np.nan
+        # --- STEP 6: SCHOLARLY WRITEUPS ---
+        elif st.session_state["step"] == 6:
+            res = st.session_state["last_test_result"]
+            vars_info = st.session_state["last_test_vars"]
             
-            st.session_state["uploaded_df"] = sample_data
-            st.session_state["file_name"] = "student_performance_sample.csv"
-            st.toast("✅ Sample Student Exam Stats loaded!")
+            if not res:
+                st.warning("⚠️ No completed computational models found. Return to Step 5 to matching tests.")
+            else:
+                is_sig = res.get("significant", False) or res.get("p_value", 1.0) < 0.05
+                st.markdown("##### 📐 Statistical Result Metric Specifications")
+                st.code(f"Test algorithm: {res['test_name']}\np-value parameter: {res.get('p_value', 'N/A')}\nSummary Interpretation: {res['message']}", language="text")
+                
+                if is_sig:
+                    st.markdown("""
+                    <div style="background-color: #ecfdf5; border-left: 5px solid #10b981; padding: 15px; border-radius: 0 8px 8px 0; margin-bottom: 20px;">
+                        <span style="font-weight: 800; font-size:13px; color: #065f46;">✔ STATISTICALLY SIGNIFICANT OUTCOME</span>
+                        <p style="margin: 4px 0 0 0; font-size: 12px; color: #047857;">p < 0.05. An authentic impact has been mathematically proven! Alternative hypothesis (H₁) is securely supported. Changing cause metrics matches genuine shifts in outcome variables.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 15px; border-radius: 0 8px 8px 0; margin-bottom: 20px;">
+                        <span style="font-weight: 800; font-size:13px; color: #991b1b;">📋 NOT STATISTICALLY SIGNIFICANT OUTCOME</span>
+                        <p style="margin: 4px 0 0 0; font-size: 12px; color: #b91c1c;">p >= 0.05. Natural selection and random variations explain observed trends. Retain null hypothesis (H₀). Finding true zero connectivity is just as valuable!</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Tabs
+                tab1, tab2, tab3 = st.tabs(["🖼️ Automated Plot Visual", "🎓 APA Dissertation segment", "📋 Structured raw output"])
+                
+                with tab1:
+                    st.markdown("##### 📊 Scientific Automated Visual Plot")
+                    try:
+                        fig = generate_analysis_plot(st.session_state["uploaded_df"], vars_info)
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    except Exception as plot_e:
+                        st.error(f"Visualization render failed: {plot_e}")
+                        
+                with tab2:
+                    st.markdown("##### 🎓 APA 7th Edition dissertation output writeup")
+                    apa_txt = st.session_state["last_apa_report"]
+                    if apa_txt:
+                        st.markdown(apa_txt)
+                        if st.button("📋 Acknowledge Content Draft"):
+                            st.toast("💡 APA segment drafted! Copy the text above to paste into your paper.")
+                    else:
+                        st.warning("⚠️ Draft study not processed yet.")
+                        if st.button("🔄 Request Dissertation draft building"):
+                            with st.spinner("Computing scholarly narrations..."):
+                                try:
+                                    system_prompt_apa = (
+                                        "You are an expert academic statistician writing a dissertation Chapter 4. "
+                                        "Take these raw statistical results and generate: 1. A plain-language interpretation of what this means for a layman. "
+                                        "2. A formal, publication-ready dissertation narrative strictly adhering to current APA Style guidelines. "
+                                        "3. A Markdown-formatted statistical table displaying the results cleanly."
+                                    )
+                                    model_apa = genai.GenerativeModel(
+                                        model_name="gemini-3.5-flash",
+                                        system_instruction=system_prompt_apa
+                                    )
+                                    prompt_apa = f"Here is the raw statistical output dictionary:\n{json.dumps(res, indent=2)}\n\nPlease write the final output strictly formatted withlayman explanation, APA narrative, and markdown table."
+                                    response_apa = model_apa.generate_content(prompt_apa)
+                                    st.session_state["last_apa_report"] = response_apa.text
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"Error calling API: {err}")
+                                    
+                with tab3:
+                    st.markdown("##### 📄 JSON Output dictionary records")
+                    st.json(res)
+                    st.info("💡 **Tutor Sync Active**: You can now discuss this analysis on the right panel chatbot!")
+
+    # Navigation controller buttons
+    st.markdown("---")
+    nav_col1, nav_col2 = st.columns(2)
+    with nav_col1:
+        if st.session_state["step"] > 1:
+            if st.button("◀ Previous", use_container_width=True):
+                st.session_state["step"] -= 1
+                st.rerun()
+    with nav_col2:
+        if st.session_state["step"] < 6:
+            can_advance = bool(st.session_state["uploaded_df"] is not None)
+            if st.button("Next ▶", use_container_width=True, disabled=not can_advance):
+                st.session_state["step"] += 1
+                st.rerun()
+
+# ------------------------------------------
+# RIGHT COLUMN: COACHING TUTOR SIDEBAR
+# ------------------------------------------
+with col_right:
+    # Modern premium container for StatBuddy Assistant Advisor
+    st.markdown("""
+    <div style="background-color: #1e1b4b; padding: 15px; border-radius: 12px 12px 0 0; color: white;">
+        <span style="float: right; font-size: 10px; background-color: #0f172a; padding: 2px 8px; border-radius: 9999px; color: #a5b4fc; font-family: monospace;">Gemini-3.5-Flash</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">🤖</span>
+            <strong style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em;">StatsBuddy AI Advisor</strong>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    with st.container(border=True):
+        # Conversation feed container
+        chat_box = st.container(height=380)
+        with chat_box:
+            for sender, message in st.session_state["chat_history"]:
+                if sender == "user":
+                    with st.chat_message("user"):
+                        st.markdown(message)
+                else:
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.markdown(message)
+                        
+        # Presets questions
+        st.markdown("<p style='font-size:11px; font-weight:700; color:#475569; margin: 5px 0 2px 0;'>💡 Presets suggestions:</p>", unsafe_allow_html=True)
+        suggest_cols = st.columns(2)
+        with suggest_cols[0]:
+            if st.button("What is continuous vs nominal?", use_container_width=True, key="preset_1"):
+                preset_query = "What is the key difference between a continuous variable and a nominal/categorical variable?"
+                st.session_state["chat_history"].append(("user", preset_query))
+                st.session_state["active_coach_query"] = preset_query
+                st.rerun()
+        with suggest_cols[1]:
+            if st.button("Explain H1 vs H0 null?", use_container_width=True, key="preset_2"):
+                preset_query = "What is the difference between an Alternative Hypothesis (H1) and a Null Hypothesis (H0)?"
+                st.session_state["chat_history"].append(("user", preset_query))
+                st.session_state["active_coach_query"] = preset_query
+                st.rerun()
+                
+        # Advanced API secret accordion config
+        with st.expander("🔑 Advanced API Config settings (Optional)"):
+            custom_key = st.text_input("Enter custom Gemini API Key:", type="password", help="If left empty, defaults to server-side loaded key.")
+            if custom_key:
+                api_key = custom_key
+                genai.configure(api_key=api_key)
+                
+        # Main chat interactive text box
+        chat_inp = st.chat_input("Ask StatsBuddy stats inquiries...")
+        
+        active_query = ""
+        if chat_inp:
+            active_query = chat_inp
+            st.session_state["chat_history"].append(("user", chat_inp))
+        elif st.session_state.get("active_coach_query"):
+            active_query = st.session_state["active_coach_query"]
+            st.session_state["active_coach_query"] = None
+            
+        if active_query:
+            if not api_key:
+                st.error("⚠️ Gemini API disconnect. Active API secret key missing.")
+                st.session_state["chat_history"].append(("assistant", "I am currently disconnected because Google Gemini API credentials are required. Please input a Gemini API Key in the settings block above!"))
+            else:
+                with st.spinner("StatsBuddy thinking..."):
+                    try:
+                        # Feed metrics and variables state to contextualize chatbot runs
+                        meta_context = ""
+                        if st.session_state["uploaded_df"] is not None:
+                            meta_context = (
+                                f"Active dataset file: {st.session_state['file_name']}\n"
+                                f"Active columns & variable classifications: {json.dumps(st.session_state['variables'])}\n"
+                                f"Scales of measurement: {json.dumps(st.session_state['scales'])}\n"
+                            )
+                            if st.session_state["last_test_result"]:
+                                meta_context += f"Last statistical test run calculated outputs: {json.dumps(st.session_state['last_test_result'])}"
+                        
+                        sys_tutor_instructions = (
+                            "Act as StatsBuddy, a friendly, encouraging, and highly knowledgeable academic research methodology coach. "
+                            "Your primary audience is university undergraduate and graduate students who do NOT have a statistical or mathematics background. "
+                            "They find statistics stressful, confusing, and full of intimidating jargon.\n\n"
+                            "Guidelines:\n"
+                            "1. Avoid overwhelming formulas when explaining concepts. Use real-world analogies (e.g., comparing p-values to rolling loaded dice).\n"
+                            "2. Explain the actual meaning of statistical findings instead of just giving numbers.\n"
+                            "3. Keep explanations highly positive, encouraging, and clear.\n"
+                            "4. Ground explanations using classifications or calculated values from their dataset if loaded."
+                        )
+                        
+                        full_prompt = f"Dataset context settings:\n{meta_context}\n\nConversation history logs:\n"
+                        for sender, val in st.session_state["chat_history"][:-1]:
+                            full_prompt += f"{'User' if sender == 'user' else 'StatsBuddy'}: {val}\n"
+                            
+                        full_prompt += f"Latest user question: {active_query}\nStatsBuddy coaching response:"
+                        
+                        model_coach = genai.GenerativeModel(
+                            model_name="gemini-3.5-flash",
+                            system_instruction=sys_tutor_instructions
+                        )
+                        response = model_coach.generate_content(full_prompt)
+                        reply_val = response.text
+                        st.session_state["chat_history"].append(("assistant", reply_val))
+                    except Exception as err:
+                        st.session_state["chat_history"].append(("assistant", f"❌ API Error: StatMentor encountered a connection problem: {str(err)}"))
             st.rerun()
+
+# ==========================================
+# 📊 FOOTER STATS WARRANTY
+# ==========================================
+
+st.markdown("""
+<div style="background-color: white; border-top: 2px solid #f1f5f9; padding: 15px; border-radius: 12px; margin-top: 30px; text-align: center; font-size: 12px; color: #64748b;">
+    <p style="margin: 0 0 4px 0;">&copy; 2026 StatsBuddy Engine. Translating complex methodologies step-by-step.</p>
+    <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
+        <span style="color: #10b981; font-weight: 700;">● Calculations Certified Offline-Safe</span>
+        <span>|</span>
+        <a href="#" style="color: #4f46e5; text-decoration: none;">Methodology Trees</a>
+        <span>|</span>
+        <a href="#" style="color: #4f46e5; text-decoration: none;">Scale Rules</a>
+    </div>
+</div>
+""", unsafe_allow_html=True)

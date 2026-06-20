@@ -134,7 +134,7 @@ with st.sidebar:
         
     st.markdown("---")
     st.markdown("### System Info")
-    st.info("Environment: Streamlit Sandbox\\nModel: gemini-1.5-flash")
+    st.info("Environment: Streamlit Sandbox\\nModel: gemini-3.5-flash")
 
 # ==========================================
 # 🗄️ STATE INITIALIZATION (st.session_state)
@@ -236,7 +236,7 @@ with col1:
                             
                             # Construct model inputs
                             model = genai.GenerativeModel(
-                                model_name="gemini-1.5-flash",
+                                model_name="gemini-3.5-flash",
                                 system_instruction=system_prompt
                             )
                             
