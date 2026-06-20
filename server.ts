@@ -87,7 +87,7 @@ async function startServer() {
 
       // Query Gemini with automatic model fallback to prevent project denied (403) errors.
       let response;
-      const modelsToTry = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
+      const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
       let lastError: any = null;
       for (const model of modelsToTry) {
         try {
@@ -102,7 +102,9 @@ async function startServer() {
           break;
         } catch (error: any) {
           const errStr = (error.message || "").toLowerCase();
-          if (errStr.includes("403") || errStr.includes("denied") || errStr.includes("project") || error.status === 403 || errStr.includes("not found")) {
+          if (errStr.includes("403") || errStr.includes("denied") || errStr.includes("project") || errStr.includes("forbidden") || error.status === 403) {
+            throw new Error("Your Google Cloud project / API Key has been denied access (403). Please configure an active and valid GEMINI_API_KEY in the AI Studio settings or check your billing status.");
+          } else if (errStr.includes("not found") || errStr.includes("model") || errStr.includes("503") || error.status === 404) {
             lastError = error;
             console.warn(`Model ${model} failed, trying next fallback...`);
             continue;

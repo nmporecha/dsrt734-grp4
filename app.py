@@ -44,8 +44,9 @@ def make_json_serializable(obj):
 def safe_generate_content(system_instruction, prompt):
     """
     Safely creates generative model with fallbacks to avoid 403/Project Denied access problems.
+    If a 403/Denied/Forbidden error is encountered, raises a specific descriptive exception.
     """
-    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
     last_err = None
     for model in models_to_try:
         try:
@@ -57,7 +58,9 @@ def safe_generate_content(system_instruction, prompt):
             return response
         except Exception as err:
             err_str = str(err).lower()
-            if "403" in err_str or "denied" in err_str or "project" in err_str or "not found" in err_str or "support" in err_str:
+            if "403" in err_str or "denied" in err_str or "project" in err_str or "forbidden" in err_str:
+                raise Exception("Your Google Cloud project / API Key has been denied access (403). Please configure an active and valid GEMINI_API_KEY in the AI Studio settings or check your billing status.")
+            elif "not found" in err_str or "support" in err_str or "503" in err_str or "model" in err_str:
                 last_err = err
                 continue
             else:
@@ -65,6 +68,55 @@ def safe_generate_content(system_instruction, prompt):
     if last_err:
         raise last_err
     raise Exception("All Gemini model options failed to respond.")
+
+def get_ai_recommendation_safely(df, file_name):
+    """
+    Analyzes the uploaded dataset profile and recommends the most appropriate statistical test 
+    by calling the Gemini model.
+    """
+    try:
+        columns_profile = []
+        for col in df.columns:
+            col_str = str(col)
+            values = df[col_str].dropna()
+            unique_vals = values.unique()
+            is_numeric = pd.api.types.is_numeric_dtype(df[col_str])
+            columns_profile.append({
+                "column": col_str,
+                "is_numeric": bool(is_numeric),
+                "unique_count": int(len(unique_vals)),
+                "samples": make_json_serializable([str(x) for x in unique_vals[:3]])
+            })
+        
+        sys_prompt = "You are StatsBuddy's expert AI research methodology and decision scientist. Choose the absolute best statistical test for a dataset, presenting results strictly in JSON."
+        prompt = f"""
+        Please analyze this dataset profile representing a research study:
+        Dataset Name: {file_name}
+        Observations (rows): {len(df)}
+        Columns Profile: {json.dumps(columns_profile, indent=2)}
+        
+        Using your advanced statistical knowledge, select the most appropriate standard statistical test to compare or relate these variables (e.g. "Independent Samples t-test", "One-Way ANOVA", "Pearson Bivariate Correlation & Simple Regression", "Chi-Square Test of Independence").
+        
+        You must return exactly a valid JSON block containing these three keys:
+        1. "recommended_test": The clear standard academic name of the test.
+        2. "test_reason": A detailed, encouraging paragraph (2-3 sentences) explaining to a non-scientist *why* this test is recommended based on the variables.
+        3. "run_type": Must be exactly one of these strings: "t_test", "anova", "regression", "chi_square", "mann_whitney".
+        
+        Do not include any conversational text outside of the JSON block. Ensure the response is perfectly valid JSON.
+        """
+        
+        response = safe_generate_content(sys_prompt, prompt)
+        text = response.text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            if lines[0].startswith("```json"):
+                text = "\n".join(lines[1:-1])
+            elif lines[0].startswith("```"):
+                text = "\n".join(lines[1:-1])
+        data = json.loads(text)
+        return data.get("recommended_test"), data.get("test_reason"), data.get("run_type")
+    except Exception as e:
+        return None, None, None
 
 # ==========================================
 # 📊 MODULAR STATISTICAL PROCESSING FUNCTIONS
@@ -431,6 +483,15 @@ if "last_test_vars" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
 
+if "ai_recommended_test" not in st.session_state:
+    st.session_state["ai_recommended_test"] = None
+
+if "ai_test_reason" not in st.session_state:
+    st.session_state["ai_test_reason"] = None
+
+if "ai_run_type" not in st.session_state:
+    st.session_state["ai_run_type"] = None
+
 def reset_variable_states():
     st.session_state["step"] = 1
     st.session_state["variables"] = {}
@@ -439,6 +500,9 @@ def reset_variable_states():
     st.session_state["last_test_result"] = None
     st.session_state["last_apa_report"] = None
     st.session_state["last_test_vars"] = None
+    st.session_state["ai_recommended_test"] = None
+    st.session_state["ai_test_reason"] = None
+    st.session_state["ai_run_type"] = None
 
 # Building standard tutoring greeting context
 if len(st.session_state["chat_history"]) == 0:
@@ -550,9 +614,18 @@ with col_left:
             if uploaded_file is not None:
                 try:
                     if st.session_state["file_name"] != uploaded_file.name:
-                        st.session_state["uploaded_df"] = pd.read_csv(uploaded_file)
+                        df = pd.read_csv(uploaded_file)
+                        st.session_state["uploaded_df"] = df
                         st.session_state["file_name"] = uploaded_file.name
                         reset_variable_states()
+                        
+                        # Generate AI Recommendation
+                        with st.spinner("StatsBuddy AI analyzing dataset profile..."):
+                            rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, uploaded_file.name)
+                        st.session_state["ai_recommended_test"] = rec_test
+                        st.session_state["ai_test_reason"] = rec_reason
+                        st.session_state["ai_run_type"] = rec_run_type
+                        
                         st.toast(f"✅ Loaded {uploaded_file.name}")
                         st.rerun()
                 except Exception as e:
@@ -565,23 +638,47 @@ with col_left:
             demo_cols = st.columns(3)
             with demo_cols[0]:
                 if st.button("📝 Exam Prep & Anxiety", use_container_width=True):
-                    st.session_state["uploaded_df"] = pd.read_csv(io.StringIO(DEMO_DATASETS["exam"]))
+                    df = pd.read_csv(io.StringIO(DEMO_DATASETS["exam"]))
+                    st.session_state["uploaded_df"] = df
                     st.session_state["file_name"] = "demo_exam_prep_anxiety.csv"
                     reset_variable_states()
+                    
+                    with st.spinner("StatsBuddy AI analyzing the Exam dataset..."):
+                        rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, "exam_prep_anxiety.csv")
+                    st.session_state["ai_recommended_test"] = rec_test
+                    st.session_state["ai_test_reason"] = rec_reason
+                    st.session_state["ai_run_type"] = rec_run_type
+                    
                     st.toast("✅ Exam Prep & Anxiety dataset loaded!")
                     st.rerun()
             with demo_cols[1]:
                 if st.button("☕ Coffee & Focus Scores", use_container_width=True):
-                    st.session_state["uploaded_df"] = pd.read_csv(io.StringIO(DEMO_DATASETS["coffee"]))
+                    df = pd.read_csv(io.StringIO(DEMO_DATASETS["coffee"]))
+                    st.session_state["uploaded_df"] = df
                     st.session_state["file_name"] = "demo_coffee_focus_rates.csv"
                     reset_variable_states()
+                    
+                    with st.spinner("StatsBuddy AI analyzing the Coffee dataset..."):
+                        rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, "coffee_focus_rates.csv")
+                    st.session_state["ai_recommended_test"] = rec_test
+                    st.session_state["ai_test_reason"] = rec_reason
+                    st.session_state["ai_run_type"] = rec_run_type
+                    
                     st.toast("✅ Coffee focus levels dataset loaded!")
                     st.rerun()
             with demo_cols[2]:
                 if st.button("🥗 Diet Weight Losses", use_container_width=True):
-                    st.session_state["uploaded_df"] = pd.read_csv(io.StringIO(DEMO_DATASETS["diet"]))
+                    df = pd.read_csv(io.StringIO(DEMO_DATASETS["diet"]))
+                    st.session_state["uploaded_df"] = df
                     st.session_state["file_name"] = "demo_diet_weight_losses.csv"
                     reset_variable_states()
+                    
+                    with st.spinner("StatsBuddy AI analyzing the Diet dataset..."):
+                        rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, "diet_weight_losses.csv")
+                    st.session_state["ai_recommended_test"] = rec_test
+                    st.session_state["ai_test_reason"] = rec_reason
+                    st.session_state["ai_run_type"] = rec_run_type
+                    
                     st.toast("✅ Diet weight losses dataset loaded!")
                     st.rerun()
             
@@ -629,13 +726,21 @@ with col_left:
                         else:
                             st.session_state["variables"][col_str] = "Exclude"
                     
-                    val = st.select_slider(
-                        f"📊 Column: **{col_str}** | (Samples: {samples_list}, Unique count: {unique_count})",
-                        options=["Cause (Independent)", "Effect (Dependent)", "Covariate (Control)", "Exclude"],
-                        value=st.session_state["variables"][col_str],
-                        key=f"role_{col_str}"
-                    )
-                    st.session_state["variables"][col_str] = val
+                    val = st.session_state["variables"][col_str]
+                    st.markdown(f"**Variable role classification for:** `{col_str}` *(Samples: {samples_list}, Unique values: {unique_count})*")
+                    cols_r = st.columns(4)
+                    if cols_r[0].button("Cause (Independent)", key=f"btn_iv_{col_str}", type="primary" if val == "Cause (Independent)" else "secondary", use_container_width=True):
+                        st.session_state["variables"][col_str] = "Cause (Independent)"
+                        st.rerun()
+                    if cols_r[1].button("Effect (Dependent)", key=f"btn_dv_{col_str}", type="primary" if val == "Effect (Dependent)" else "secondary", use_container_width=True):
+                        st.session_state["variables"][col_str] = "Effect (Dependent)"
+                        st.rerun()
+                    if cols_r[2].button("Covariate (Control)", key=f"btn_cov_{col_str}", type="primary" if val == "Covariate (Control)" else "secondary", use_container_width=True):
+                        st.session_state["variables"][col_str] = "Covariate (Control)"
+                        st.rerun()
+                    if cols_r[3].button("Exclude", key=f"ignore_{col_str}", type="primary" if val == "Exclude" else "secondary", use_container_width=True):
+                        st.session_state["variables"][col_str] = "Exclude"
+                        st.rerun()
                     
                     # UI friendly explanation of why the recommendation or selected role is correct
                     if val == "Effect (Dependent)":
@@ -674,13 +779,21 @@ with col_left:
                             else:
                                 st.session_state["scales"][col_str] = "Ratio (True Zero)"
                                 
-                        val = st.select_slider(
-                            f"📐 **{col_str}** | (Classified as {st.session_state['variables'][col_str]})",
-                            options=["Nominal (Categories)", "Ordinal (Ordered)", "Interval (Arbitrary)", "Ratio (True Zero)"],
-                            value=st.session_state["scales"][col_str],
-                            key=f"scale_{col_str}"
-                        )
-                        st.session_state["scales"][col_str] = val
+                        val = st.session_state["scales"][col_str]
+                        st.markdown(f"**Scale of measurement classification for:** `{col_str}` *(Classified as {st.session_state['variables'][col_str]})*")
+                        cols_s = st.columns(4)
+                        if cols_s[0].button("Nominal (Categories)", key=f"btn_nom_{col_str}", type="primary" if val == "Nominal (Categories)" else "secondary", use_container_width=True):
+                            st.session_state["scales"][col_str] = "Nominal (Categories)"
+                            st.rerun()
+                        if cols_s[1].button("Ordinal (Ordered)", key=f"btn_ord_{col_str}", type="primary" if val == "Ordinal (Ordered)" else "secondary", use_container_width=True):
+                            st.session_state["scales"][col_str] = "Ordinal (Ordered)"
+                            st.rerun()
+                        if cols_s[2].button("Interval (Arbitrary)", key=f"btn_int_{col_str}", type="primary" if val == "Interval (Arbitrary)" else "secondary", use_container_width=True):
+                            st.session_state["scales"][col_str] = "Interval (Arbitrary)"
+                            st.rerun()
+                        if cols_s[3].button("Ratio (True Zero)", key=f"btn_rat_{col_str}", type="primary" if val == "Ratio (True Zero)" else "secondary", use_container_width=True):
+                            st.session_state["scales"][col_str] = "Ratio (True Zero)"
+                            st.rerun()
                         
                         # UI friendly explanation of why the selected or recommended scale is correct
                         if val == "Nominal (Categories)":
@@ -759,37 +872,60 @@ with col_left:
                 df = st.session_state["uploaded_df"]
                 unique_iv = df[main_iv].dropna().nunique()
                 
-                recommended_test = "Nonparametric Alternative"
-                test_reason = "Mixed measurement characteristics suggest running a robust nonparametric rank test."
-                run_type = "mann_whitney"
+                ai_test = st.session_state.get("ai_recommended_test")
+                ai_reason = st.session_state.get("ai_test_reason")
+                ai_run_type = st.session_state.get("ai_run_type")
                 
-                if "Nominal" in iv_scale and "Ratio" in dv_scale:
-                    if unique_iv == 2:
-                        recommended_test = "Independent Samples t-test"
-                        test_reason = f"Your Independent grouping variable (**{main_iv}**) contains exactly 2 unique categories, and your dependent variable (**{main_dv}**) is continuous numbers. A standard t-test is optimal here."
-                        run_type = "t_test"
-                    else:
-                        recommended_test = "One-Way ANOVA"
-                        test_reason = f"Your Independent parameter (**{main_iv}**) contains {unique_iv} (> 2) groups. An ANOVA checks general group variants simultaneously, avoiding combined type I errors."
-                        run_type = "anova"
-                elif "Ratio" in iv_scale and "Ratio" in dv_scale:
-                    recommended_test = "Pearson Bivariate Correlation & Simple Regression"
-                    test_reason = f"Both Cause (**{main_iv}**) and Effect (**{main_dv}**) parameters are continuous numeric scales, permitting predictive trend modeling."
-                    run_type = "regression"
-                elif "Nominal" in iv_scale and "Nominal" in dv_scale:
-                    recommended_test = "Chi-Square Test of Independence"
-                    test_reason = f"Both Cause and Effect variables represent categorical divisions, needing coordinate contingency counts comparisons."
-                    run_type = "chi_square"
+                is_using_ai = False
+                
+                if ai_test:
+                    recommended_test = ai_test
+                    test_reason = ai_reason
+                    run_type = ai_run_type
+                    is_using_ai = True
+                else:
+                    recommended_test = "Nonparametric Alternative"
+                    test_reason = "Mixed measurement characteristics suggest running a robust nonparametric rank test."
+                    run_type = "mann_whitney"
+                    
+                    if "Nominal" in iv_scale and "Ratio" in dv_scale:
+                        if unique_iv == 2:
+                            recommended_test = "Independent Samples t-test"
+                            test_reason = f"Your Independent grouping variable (**{main_iv}**) contains exactly 2 unique categories, and your dependent variable (**{main_dv}**) is continuous numbers. A standard t-test is optimal here."
+                            run_type = "t_test"
+                        else:
+                            recommended_test = "One-Way ANOVA"
+                            test_reason = f"Your Independent parameter (**{main_iv}**) contains {unique_iv} (> 2) groups. An ANOVA checks general group variants simultaneously, avoiding combined type I errors."
+                            run_type = "anova"
+                    elif "Ratio" in iv_scale and "Ratio" in dv_scale:
+                        recommended_test = "Pearson Bivariate Correlation & Simple Regression"
+                        test_reason = f"Both Cause (**{main_iv}**) and Effect (**{main_dv}**) parameters are continuous numeric scales, permitting predictive trend modeling."
+                        run_type = "regression"
+                    elif "Nominal" in iv_scale and "Nominal" in dv_scale:
+                        recommended_test = "Chi-Square Test of Independence"
+                        test_reason = f"Both Cause and Effect variables represent categorical divisions, needing coordinate contingency counts comparisons."
+                        run_type = "chi_square"
+                
+                if is_using_ai:
+                    st.markdown(f"""
+                    <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <span style="background-color: #22c55e; color: white; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 4px;">🤖 STATSBUDDY AI RECOMMENDED TEST</span>
+                        <p style="font-size: 16px; font-weight: 800; color: #166534; margin: 8px 0 2px 0;">{recommended_test}</p>
+                        <p style="font-size: 12.5px; color: #15803d; margin: 4px 0 0 0; line-height: 1.4;">{test_reason}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style="background-color: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <span style="background-color: #d97706; color: white; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 4px;">🧭 RULE-BASED FALLBACK MATCH</span>
+                        <p style="font-size: 16px; font-weight: 800; color: #92400e; margin: 8px 0 2px 0;">{recommended_test}</p>
+                        <p style="font-size: 12.5px; color: #b45309; margin: 4px 0 0 0; line-height: 1.4;">{test_reason}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                 st.markdown(f"""
-                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 12px;">
-                    <h4 style="color: #166534; margin: 0; font-size: 15px; font-weight: 800;">🚀 Recommended Statistical Test Found!</h4>
-                    <p style="font-size: 14px; font-weight: 800; color: #15803d; margin: 6px 0 2px 0;">{recommended_test}</p>
-                    <p style="font-size: 12px; color: #166534; margin: 0; line-height: 1.4;">{test_reason}</p>
-                </div>
-                
                 <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                    <h5 style="color: #475569; margin: 0 0 6px 0; font-size: 13px; font-weight: 700;">💡 Why StatMentor recommends this configuration:</h5>
+                    <h5 style="color: #475569; margin: 0 0 6px 0; font-size: 13px; font-weight: 700;">💡 Why StatMentor / StatsBuddy recommends this configuration:</h5>
                     <ul style="font-size: 12px; color: #64748b; margin: 0; padding-left: 18px; line-height: 1.55;">
                         <li><b>Variable Role Matching</b>: The independent variable (<i>{main_iv}</i>) and dependent variable (<i>{main_dv}</i>) roles align perfectly with this analytical method.</li>
                         <li><b>Scale of Measurement Alignment</b>: Your scales are mapped as <b>{iv_scale}</b> for cause and <b>{dv_scale}</b> for effect. This combination mathematically mandates <b>{recommended_test}</b> to avoid statistical bias or invalid standard errors.</li>
@@ -797,6 +933,23 @@ with col_left:
                     </ul>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # Manual trigger button for AI analysis
+                rec_cols = st.columns([8, 4])
+                with rec_cols[0]:
+                    st.caption("Want our senior AI researcher to re-analyze your dataset profile and update advice?")
+                with rec_cols[1]:
+                    if st.button("🔄 AI Re-analyze Dataset", use_container_width=True):
+                        with st.spinner("StatsBuddy senior AI analyzing dataset profile..."):
+                            rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, st.session_state["file_name"])
+                        if rec_test:
+                            st.session_state["ai_recommended_test"] = rec_test
+                            st.session_state["ai_test_reason"] = rec_reason
+                            st.session_state["ai_run_type"] = rec_run_type
+                            st.success("🤖 AI model updated recommendation!")
+                            st.rerun()
+                        else:
+                            st.error("Could not reach AI model. Check API settings.")
                 
                 st.markdown("##### 🔬 Data Integrity & Assumptions Screen")
                 
