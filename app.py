@@ -114,8 +114,13 @@ def get_ai_recommendation_safely(df, file_name):
             elif lines[0].startswith("```"):
                 text = "\n".join(lines[1:-1])
         data = json.loads(text)
+        st.session_state["gemini_api_working"] = True
+        if "ai_recommendation_error" in st.session_state:
+            del st.session_state["ai_recommendation_error"]
         return data.get("recommended_test"), data.get("test_reason"), data.get("run_type")
     except Exception as e:
+        st.session_state["gemini_api_working"] = False
+        st.session_state["ai_recommendation_error"] = str(e)
         return None, None, None
 
 # ==========================================
@@ -742,15 +747,18 @@ with col_left:
                         st.session_state["variables"][col_str] = "Exclude"
                         st.rerun()
                     
-                    # UI friendly explanation of why the recommendation or selected role is correct
-                    if val == "Effect (Dependent)":
-                        st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Effect (Dependent)</b> because continuous numerical profiles (unique values = {unique_count}) are mathematically ideal representative outcome metrics for comparative or regression modeling.</p>", unsafe_allow_html=True)
-                    elif val == "Cause (Independent)":
-                        st.markdown(f"<p style='font-size:11.5px; color:#10b981; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Cause (Independent)</b> because containing discrete subsets (unique count = {unique_count}) makes it highly suitable for splitting comparison parameters and grouping cohorts.</p>", unsafe_allow_html=True)
-                    elif val == "Covariate (Control)":
-                        st.markdown("<p style='font-size:11.5px; color:#6366f1; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Covariate (Control)</b> to isolate other continuous parameters from biasing the main independent effect.</p>", unsafe_allow_html=True)
+                    # Determine recommended role statically based on data profiles to remain constant
+                    if is_num and unique_count > 5:
+                        rec_role = "Effect (Dependent)"
+                        rec_reason = f"continuous numerical profiles (unique values = {unique_count}) are mathematically ideal representative outcome metrics for comparative or regression modeling."
+                    elif unique_count <= 5:
+                        rec_role = "Cause (Independent)"
+                        rec_reason = f"containing discrete subgroups (unique count = {unique_count}) makes it highly suitable for splitting comparison parameters and grouping cohorts."
                     else:
-                        st.markdown("<p style='font-size:11.5px; color:#64748b; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Exclude</b> to completely disregard this parameter card and focus strictly on primary active study variables.</p>", unsafe_allow_html=True)
+                        rec_role = "Exclude"
+                        rec_reason = "complex or high-cardinality values that are best excluded to focus strictly on primary active study variables."
+                    
+                    st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_role}</b> because {rec_reason}</p>", unsafe_allow_html=True)
                     
         # --- STEP 3: SCALES OF MEASUREMENT ---
         elif st.session_state["step"] == 3:
@@ -795,15 +803,18 @@ with col_left:
                             st.session_state["scales"][col_str] = "Ratio (True Zero)"
                             st.rerun()
                         
-                        # UI friendly explanation of why the selected or recommended scale is correct
-                        if val == "Nominal (Categories)":
-                            st.markdown("<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Nominal (Categories)</b> because this column contains qualitative grouping attributes (non-ordered attributes) serving as categorical cohorts rather than continuous mathematical values.</p>", unsafe_allow_html=True)
-                        elif val == "Ordinal (Ordered)":
-                            st.markdown(f"<p style='font-size:11.5px; color:#d97706; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Ordinal (Ordered)</b> because the small subset of distinct levels ({unique_count} unique items) suggests relative ordered positions or ranks (e.g. Likert scales) where intervals are not mathematically equal.</p>", unsafe_allow_html=True)
-                        elif val == "Interval (Arbitrary)":
-                            st.markdown("<p style='font-size:11.5px; color:#06b6d4; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Interval (Arbitrary)</b> because numbers have a precise increment scale, but zero represents an arbitrary point rather than an absolute physical baseline (e.g. Temperature scales).</p>", unsafe_allow_html=True)
+                        # Determine recommended scale statically based on data profiles to remain constant
+                        if not is_num:
+                            rec_scale = "Nominal (Categories)"
+                            rec_scale_reason = "this column contains qualitative grouping attributes (non-ordered attributes) serving as categorical cohorts rather than continuous mathematical values."
+                        elif unique_count < 6:
+                            rec_scale = "Ordinal (Ordered)"
+                            rec_scale_reason = f"the small subset of distinct levels ({unique_count} unique items) suggests relative ordered positions or ranks (e.g. Likert scales) where intervals are not mathematically equal."
                         else:
-                            st.markdown("<p style='font-size:11.5px; color:#10b981; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: Selected <b>Ratio (True Zero)</b> because this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations.</p>", unsafe_allow_html=True)
+                            rec_scale = "Ratio (True Zero)"
+                            rec_scale_reason = "this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations."
+                        
+                        st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_scale}</b> because {rec_scale_reason}</p>", unsafe_allow_html=True)
 
         # --- STEP 4: RESEARCH HYPOTHESES ---
         elif st.session_state["step"] == 4:
@@ -877,8 +888,9 @@ with col_left:
                 ai_run_type = st.session_state.get("ai_run_type")
                 
                 is_using_ai = False
+                is_gemini_working = st.session_state.get("gemini_api_working", True)
                 
-                if ai_test:
+                if ai_test and is_gemini_working:
                     recommended_test = ai_test
                     test_reason = ai_reason
                     run_type = ai_run_type
@@ -894,9 +906,9 @@ with col_left:
                             test_reason = f"Your Independent grouping variable (**{main_iv}**) contains exactly 2 unique categories, and your dependent variable (**{main_dv}**) is continuous numbers. A standard t-test is optimal here."
                             run_type = "t_test"
                         else:
-                            recommended_test = "One-Way ANOVA"
-                            test_reason = f"Your Independent parameter (**{main_iv}**) contains {unique_iv} (> 2) groups. An ANOVA checks general group variants simultaneously, avoiding combined type I errors."
-                            run_type = "anova"
+                             recommended_test = "One-Way ANOVA"
+                             test_reason = f"Your Independent parameter (**{main_iv}**) contains {unique_iv} (> 2) groups. An ANOVA checks general group variants simultaneously, avoiding combined type I errors."
+                             run_type = "anova"
                     elif "Ratio" in iv_scale and "Ratio" in dv_scale:
                         recommended_test = "Pearson Bivariate Correlation & Simple Regression"
                         test_reason = f"Both Cause (**{main_iv}**) and Effect (**{main_dv}**) parameters are continuous numeric scales, permitting predictive trend modeling."
@@ -915,11 +927,11 @@ with col_left:
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    st.markdown(f"""
-                    <div style="background-color: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                        <span style="background-color: #d97706; color: white; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 4px;">🧭 RULE-BASED FALLBACK MATCH</span>
-                        <p style="font-size: 16px; font-weight: 800; color: #92400e; margin: 8px 0 2px 0;">{recommended_test}</p>
-                        <p style="font-size: 12.5px; color: #b45309; margin: 4px 0 0 0; line-height: 1.4;">{test_reason}</p>
+                    st.markdown("""
+                    <div style="background-color: #fef2f2; border: 1px solid #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 20px;">
+                        <p style="font-size: 12px; color: #b91c1c; margin: 0; font-weight: 600;">
+                            ⚠️ StatsBuddy recommendation is currently unavailable because the Gemini AI service is offline or access is restricted. Standard offline analytical matching procedures have been loaded.
+                        </p>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -1255,7 +1267,20 @@ with col_right:
                         reply_val = response.text
                         st.session_state["chat_history"].append(("assistant", reply_val))
                     except Exception as err:
-                        st.session_state["chat_history"].append(("assistant", f"❌ API Error: StatMentor encountered a connection problem: {str(err)}"))
+                        err_msg = str(err)
+                        if "403" in err_msg or "denied" in err_msg.lower() or "api key" in err_msg.lower() or "project" in err_msg.lower():
+                            friendly_err = (
+                                "✨ **StatMentor Notice**:\n\n"
+                                "Active generative AI recommendation chat features require a valid **Gemini API Key**. "
+                                "Your Google Cloud project / API Key has been denied access (403) or is currently missing.\n\n"
+                                "🔧 **How to resolve this**:\n"
+                                "1. Grab a free API key from [Google AI Studio](https://aistudio.google.com/).\n"
+                                "2. Configure your `GEMINI_API_KEY` in the AI Studio settings or check your billing status to restore chat capabilities instantly!\n\n"
+                                "*(Note: All local offline data analysis, distribution plots, metrics, and rule-based testing fallback recommendations remain 100% functional!)*"
+                            )
+                            st.session_state["chat_history"].append(("assistant", friendly_err))
+                        else:
+                            st.session_state["chat_history"].append(("assistant", f"❌ API Error: StatMentor encountered a connection problem: {str(err)}"))
             st.rerun()
 
 # ==========================================

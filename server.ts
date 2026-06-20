@@ -121,7 +121,23 @@ async function startServer() {
       return res.json({ reply });
 
     } catch (error: any) {
-      console.error("Gemini API server error:", error);
+      const errStr = (error.message || "").toLowerCase();
+      const is403 = errStr.includes("403") || errStr.includes("denied") || errStr.includes("project") || errStr.includes("forbidden") || error.status === 403;
+      
+      if (is403) {
+        console.warn("Gemini API access notice (403 / restricted): Access is currently denied or key is offline.");
+        const friendlyMarkdown = 
+          "✨ **StatMentor Notice**:\n\n" +
+          "Active generative AI recommendation chat features require a valid **Gemini API Key**. " +
+          "Your Google Cloud project / API Key has been denied access (403) or is currently missing.\n\n" +
+          "🔧 **How to resolve this**:\n" +
+          "1. Grab a free API key from [Google AI Studio](https://aistudio.google.com/).\n" +
+          "2. Configure your `GEMINI_API_KEY` in the AI Studio settings or check your billing status to restore chat capabilities instantly!\n\n" +
+          "*(Note: All local offline data analysis, distribution plots, metrics, and rule-based testing fallback recommendations remain 100% functional!)*";
+        return res.json({ reply: friendlyMarkdown });
+      }
+
+      console.error("Generic server processing error encountered:", error);
       return res.status(500).json({ 
         error: error.message || "An error occurred during generative processing.",
         message: `Oops! StatMentor AI encountered an issue: ${error.message || 'Unknown integration error'}.`
