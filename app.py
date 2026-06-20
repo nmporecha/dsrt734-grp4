@@ -1182,9 +1182,9 @@ with col_left:
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
-                    <div style="background-color: #fef2f2; border: 1px solid #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 20px;">
-                        <p style="font-size: 12px; color: #b91c1c; margin: 0; font-weight: 600;">
-                            ⚠️ StatsBuddy recommendation is currently unavailable because the Gemini AI service is offline or access is restricted. Standard offline analytical matching procedures have been loaded.
+                    <div style="background-color: var(--error-banner-bg); border: 1px solid var(--error-banner-border); padding: 12px; border-radius: 8px; margin-bottom: 20px;">
+                        <p style="font-size: 12px; color: var(--error-banner-text); margin: 0; font-weight: 600;">
+                            ⚠️ StatsBuddy recommendation is currently unavailable. Standard offline analytical matching procedures have been loaded.
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1230,10 +1230,6 @@ with col_left:
                         </ul>
                     </div>
                     """, unsafe_allow_html=True)
-                elif not api_key:
-                    st.info("💡 Note: AI recommendation details are hidden in offline mode.")
-                else:
-                    st.info("💡 Note: You have manually overridden the AI-selected test. Recommendation methodology details are hidden.")
                 
                 # Manual trigger button for AI analysis
                 rec_cols = st.columns([8, 4])
@@ -1387,9 +1383,9 @@ with col_left:
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
-                    <div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 15px; border-radius: 0 8px 8px 0; margin-bottom: 20px;">
-                        <span style="font-weight: 800; font-size:13px; color: #991b1b;">📋 NOT STATISTICALLY SIGNIFICANT OUTCOME</span>
-                        <p style="margin: 4px 0 0 0; font-size: 12px; color: #b91c1c;">p >= 0.05. Natural selection and random variations explain observed trends. Retain null hypothesis (H₀). Finding true zero connectivity is just as valuable!</p>
+                    <div style="background-color: var(--error-banner-bg); border-left: 5px solid var(--error-banner-border); padding: 15px; border-radius: 0 8px 8px 0; margin-bottom: 20px;">
+                        <span style="font-weight: 800; font-size:13px; color: var(--error-banner-text);">📋 NOT STATISTICALLY SIGNIFICANT</span>
+                        <p style="margin: 4px 0 0 0; font-size: 12px; color: var(--error-banner-text);">p >= 0.05. Natural selection and random variations explain observed trends. Retain null hypothesis (H₀).</p>
                     </div>
                     """, unsafe_allow_html=True)
                 
