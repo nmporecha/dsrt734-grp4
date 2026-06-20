@@ -71,8 +71,8 @@ def safe_generate_content(system_instruction, prompt):
 
 def get_ai_recommendation_safely(df, file_name):
     """
-    Analyzes the uploaded dataset profile and recommends the most appropriate statistical test 
-    by calling the Gemini model.
+    Analyzes the uploaded dataset profile and recommends the most appropriate statistical test,
+    roles, scales, and contextual questions by calling the Gemini model.
     """
     try:
         columns_profile = []
@@ -88,19 +88,31 @@ def get_ai_recommendation_safely(df, file_name):
                 "samples": make_json_serializable([str(x) for x in unique_vals[:3]])
             })
         
-        sys_prompt = "You are StatsBuddy's expert AI research methodology and decision scientist. Choose the absolute best statistical test for a dataset, presenting results strictly in JSON."
+        sys_prompt = "You are StatsBuddy's expert AI research methodology and decision scientist. Choose the absolute best statistical test, variable classifications, measurement scales, and step-by-step coaching questions for a student's dataset, presenting results strictly in JSON."
         prompt = f"""
         Please analyze this dataset profile representing a research study:
         Dataset Name: {file_name}
         Observations (rows): {len(df)}
         Columns Profile: {json.dumps(columns_profile, indent=2)}
         
-        Using your advanced statistical knowledge, select the most appropriate standard statistical test to compare or relate these variables (e.g. "Independent Samples t-test", "One-Way ANOVA", "Pearson Bivariate Correlation & Simple Regression", "Chi-Square Test of Independence").
+        Using your advanced statistical knowledge:
+        1. Select the most appropriate standard statistical test to compare or relate these variables.
+        2. Recommend the classification role for each column, choosing from: "Cause (Independent)", "Effect (Dependent)", "Covariate (Control)", or "Exclude".
+        3. Recommend the scale of measurement for each column, choosing from: "Nominal (Categories)", "Ordinal (Ordered)", "Interval (Arbitrary)", or "Ratio (True Zero)".
+        4. Draft exactly 2 custom student coaching questions for each of our 5 main user wizard steps:
+           - "step_2" (mapping roles)
+           - "step_3" (measurement scales)
+           - "step_4" (hypotheses design)
+           - "step_5" (assumptions & testing)
+           - "step_6" (APA report & interpretation)
         
-        You must return exactly a valid JSON block containing these three keys:
-        1. "recommended_test": The clear standard academic name of the test.
-        2. "test_reason": A detailed, encouraging paragraph (2-3 sentences) explaining to a non-scientist *why* this test is recommended based on the variables.
-        3. "run_type": Must be exactly one of these strings: "t_test", "anova", "regression", "chi_square", "mann_whitney".
+        You must return exactly a valid JSON block containing these keys:
+        - "recommended_test": The clear standard academic name of the test (e.g. "Independent Samples t-test", "One-Way ANOVA", "Pearson Bivariate Correlation & Simple Regression", "Chi-Square Test of Independence").
+        - "test_reason": A detailed, encouraging paragraph (2-3 sentences) explaining to a student why this test is selected.
+        - "run_type": Must be exactly one of: "t_test", "anova", "regression", "chi_square", "mann_whitney".
+        - "variables": A flat JSON object mapping each column name string to its recommended role choice string.
+        - "scales": A flat JSON object mapping each column name string to its recommended scale choice string.
+        - "preset_questions_by_step": A dict with keys "step_2", "step_3", "step_4", "step_5", "step_6" mapping each to a list of exactly 2 text questions.
         
         Do not include any conversational text outside of the JSON block. Ensure the response is perfectly valid JSON.
         """
@@ -117,11 +129,11 @@ def get_ai_recommendation_safely(df, file_name):
         st.session_state["gemini_api_working"] = True
         if "ai_recommendation_error" in st.session_state:
             del st.session_state["ai_recommendation_error"]
-        return data.get("recommended_test"), data.get("test_reason"), data.get("run_type")
+        return data
     except Exception as e:
         st.session_state["gemini_api_working"] = False
         st.session_state["ai_recommendation_error"] = str(e)
-        return None, None, None
+        return {}
 
 # ==========================================
 # 📊 MODULAR STATISTICAL PROCESSING FUNCTIONS
@@ -336,27 +348,58 @@ def generate_analysis_plot(df, run_args):
             ax.set_xlabel(col1)
             ax.set_ylabel(col2)
             
-        elif test_type == "group_comparison":
+        elif test_type in ["group_comparison", "t_test", "anova", "mann_whitney"]:
             cat_col = run_args["cat_col"]
             num_col = run_args["num_col"]
             clean_df = df[[cat_col, num_col]].dropna()
-            # Boxplot with data points overlaid
-            sns.boxplot(data=clean_df, x=cat_col, y=num_col, ax=ax, palette="Set2", showfliers=False, width=0.4)
-            sns.stripplot(data=clean_df, x=cat_col, y=num_col, ax=ax, color="#1e293b", alpha=0.4, size=5, jitter=0.15)
-            ax.set_title(f"Boxplot with Data Points: {num_col} by {cat_col}", fontsize=11, fontweight="bold")
-            ax.set_xlabel(cat_col)
-            ax.set_ylabel(num_col)
+            is_num = pd.api.types.is_numeric_dtype(clean_df[num_col])
             
-        elif test_type == "regression":
+            if is_num:
+                # Boxplot with data points overlaid
+                sns.boxplot(data=clean_df, x=cat_col, y=num_col, ax=ax, palette="Set2", showfliers=False, width=0.4)
+                sns.stripplot(data=clean_df, x=cat_col, y=num_col, ax=ax, color="#1e293b", alpha=0.4, size=5, jitter=0.15)
+                ax.set_title(f"Boxplot with Data Points: {num_col} by {cat_col}", fontsize=11, fontweight="bold")
+                ax.set_xlabel(cat_col)
+                ax.set_ylabel(num_col)
+            else:
+                # Fallback to categorical stacked count bar chart!
+                crosstab = pd.crosstab(clean_df[cat_col], clean_df[num_col])
+                crosstab.plot(kind="bar", stacked=True, ax=ax, cmap="Set2")
+                ax.set_title(f"Stacked Count Distribution: {num_col} by {cat_col}", fontsize=11, fontweight="bold")
+                ax.set_xlabel(cat_col)
+                ax.set_ylabel("Count")
+            
+        elif test_type in ["regression", "ols"]:
             iv_col = run_args["iv_col"]
             dv_col = run_args["dv_col"]
             clean_df = df[[iv_col, dv_col]].dropna()
-            sns.scatterplot(data=clean_df, x=iv_col, y=dv_col, ax=ax, color="#3b82f6", s=50, alpha=0.8)
-            if len(clean_df) > 1:
-                sns.regplot(data=clean_df, x=iv_col, y=dv_col, ax=ax, scatter=False, color="#dc2626", line_kws={"linewidth": 2})
-            ax.set_title(f"OLS Regression: {iv_col} Predicts {dv_col}", fontsize=11, fontweight="bold")
-            ax.set_xlabel(iv_col)
-            ax.set_ylabel(dv_col)
+            is_num_iv = pd.api.types.is_numeric_dtype(clean_df[iv_col])
+            is_num_dv = pd.api.types.is_numeric_dtype(clean_df[dv_col])
+            
+            if is_num_iv and is_num_dv:
+                sns.scatterplot(data=clean_df, x=iv_col, y=dv_col, ax=ax, color="#3b82f6", s=50, alpha=0.8)
+                if len(clean_df) > 1:
+                    sns.regplot(data=clean_df, x=iv_col, y=dv_col, ax=ax, scatter=False, color="#dc2626", line_kws={"linewidth": 2})
+                ax.set_title(f"OLS Regression: {iv_col} Predicts {dv_col}", fontsize=11, fontweight="bold")
+                ax.set_xlabel(iv_col)
+                ax.set_ylabel(dv_col)
+            else:
+                crosstab = pd.crosstab(clean_df[iv_col], clean_df[dv_col])
+                crosstab.plot(kind="bar", stacked=True, ax=ax, cmap="Set2")
+                ax.set_title(f"Distribution: {dv_col} by {iv_col}", fontsize=11, fontweight="bold")
+                ax.set_xlabel(iv_col)
+                ax.set_ylabel("Count")
+                
+        elif test_type == "chi_square":
+            cat_col = run_args.get("cat_col", run_args.get("col"))
+            num_col = run_args.get("num_col", run_args.get("col2"))
+            clean_df = df[[cat_col, num_col]].dropna()
+            crosstab = pd.crosstab(clean_df[cat_col], clean_df[num_col])
+            crosstab.plot(kind="bar", stacked=True, ax=ax, cmap="Set2")
+            ax.set_title(f"Contingency Stacked Counts: {num_col} by {cat_col}", fontsize=11, fontweight="bold")
+            ax.set_xlabel(cat_col)
+            ax.set_ylabel("Count")
+            
     except Exception as plot_err:
         ax.text(0.5, 0.5, f"Plot Error: {str(plot_err)}", transform=ax.transAxes, ha="center", va="center", color="red")
         ax.set_title("Could not generate visualization")
@@ -425,7 +468,7 @@ Low-Carb,4.6,40"""
 }
 
 # ==========================================
-# 🔑 STREAMLIT PAGE SETUP
+# 🔑 STREAMLIT PAGE SETUP & SIDEBAR
 # ==========================================
 
 st.set_page_config(
@@ -434,25 +477,83 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom premium styling matching Inter font and clean panels
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
-}
-.reportview-container {
-    background-color: #f8fafc;
-}
-</style>
+# Render premium sidebar
+st.sidebar.markdown("""
+<div style="text-align: center; padding: 10px 0;">
+    <span style="font-size: 32px;">🎓</span>
+    <h2 style="margin: 5px 0 0 0; color: #4338ca; font-size: 18px; font-weight: 800;">StatsBuddy</h2>
+    <p style="font-size: 11px; color: #64748b; margin: 0;">Non-Statisticians Research Partner</p>
+</div>
 """, unsafe_allow_html=True)
+st.sidebar.markdown("---")
 
-# Main API Key load from env
-api_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+theme_mode = st.sidebar.radio("☀️ / 🌙 Select Workspace Theme", ["Classic Dark Mode", "Scholarly Light Mode"], index=0)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔑 API Custom Override")
+raw_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+custom_key = st.sidebar.text_input(
+    "Enter custom Gemini API Key:", 
+    type="password", 
+    value=raw_key if raw_key else "", 
+    help="Overrides default API key if provided. Get a key from Google AI Studio."
+)
+api_key = custom_key if custom_key else raw_key
 
 # We configure generative AI globally if API key exists
 if api_key:
     genai.configure(api_key=api_key)
+    st.sidebar.success("🟢 StatsBuddy AI Connected!")
+else:
+    st.sidebar.warning("⚠️ StatsBuddy AI Disconnected (Fallback rules active)")
+
+# CSS dynamic injection matching the selected theme mode
+if theme_mode == "Scholarly Light Mode":
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    html, body, [class*="css"], .stApp {
+        font-family: 'Inter', sans-serif;
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+    }
+    div[data-testid="stSidebar"] {
+        background-color: #ffffff !important;
+        border-right: 1px solid #e2e8f0 !important;
+    }
+    div[data-testid="stExpander"] {
+        background-color: #ffffff !important;
+        border: 1px solid #e2e8f0 !important;
+    }
+    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
+        color: #0f172a !important;
+        background-color: #ffffff !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    html, body, [class*="css"], .stApp {
+        font-family: 'Inter', sans-serif;
+        background-color: #0f172a !important;
+        color: #f8fafc !important;
+    }
+    div[data-testid="stSidebar"] {
+        background-color: #0b0f19 !important;
+        border-right: 1px solid #1e293b !important;
+    }
+    div[data-testid="stExpander"] {
+        background-color: #1e293b !important;
+        border: 1px solid #334155 !important;
+    }
+    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
+        color: #f8fafc !important;
+        background-color: #1e293b !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # ==========================================
 # 🗄️ STATE INITIALIZATION (st.session_state)
@@ -497,6 +598,15 @@ if "ai_test_reason" not in st.session_state:
 if "ai_run_type" not in st.session_state:
     st.session_state["ai_run_type"] = None
 
+if "ai_preloaded_roles" not in st.session_state:
+    st.session_state["ai_preloaded_roles"] = {}
+
+if "ai_preloaded_scales" not in st.session_state:
+    st.session_state["ai_preloaded_scales"] = {}
+
+if "ai_preloaded_questions" not in st.session_state:
+    st.session_state["ai_preloaded_questions"] = {}
+
 def reset_variable_states():
     st.session_state["step"] = 1
     st.session_state["variables"] = {}
@@ -508,6 +618,9 @@ def reset_variable_states():
     st.session_state["ai_recommended_test"] = None
     st.session_state["ai_test_reason"] = None
     st.session_state["ai_run_type"] = None
+    st.session_state["ai_preloaded_roles"] = {}
+    st.session_state["ai_preloaded_scales"] = {}
+    st.session_state["ai_preloaded_questions"] = {}
 
 # Building standard tutoring greeting context
 if len(st.session_state["chat_history"]) == 0:
@@ -625,11 +738,14 @@ with col_left:
                         reset_variable_states()
                         
                         # Generate AI Recommendation
-                        with st.spinner("StatsBuddy AI analyzing dataset profile..."):
-                            rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, uploaded_file.name)
-                        st.session_state["ai_recommended_test"] = rec_test
-                        st.session_state["ai_test_reason"] = rec_reason
-                        st.session_state["ai_run_type"] = rec_run_type
+                        with st.spinner("StatsBuddy AI preloading recommendations and variables..."):
+                            res_data = get_ai_recommendation_safely(df, uploaded_file.name)
+                        st.session_state["ai_recommended_test"] = res_data.get("recommended_test")
+                        st.session_state["ai_test_reason"] = res_data.get("test_reason")
+                        st.session_state["ai_run_type"] = res_data.get("run_type")
+                        st.session_state["ai_preloaded_roles"] = res_data.get("variables", {})
+                        st.session_state["ai_preloaded_scales"] = res_data.get("scales", {})
+                        st.session_state["ai_preloaded_questions"] = res_data.get("preset_questions_by_step", {})
                         
                         st.toast(f"✅ Loaded {uploaded_file.name}")
                         st.rerun()
@@ -648,11 +764,14 @@ with col_left:
                     st.session_state["file_name"] = "demo_exam_prep_anxiety.csv"
                     reset_variable_states()
                     
-                    with st.spinner("StatsBuddy AI analyzing the Exam dataset..."):
-                        rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, "exam_prep_anxiety.csv")
-                    st.session_state["ai_recommended_test"] = rec_test
-                    st.session_state["ai_test_reason"] = rec_reason
-                    st.session_state["ai_run_type"] = rec_run_type
+                    with st.spinner("StatsBuddy AI preloading Exam dataset mapping..."):
+                        res_data = get_ai_recommendation_safely(df, "exam_prep_anxiety.csv")
+                    st.session_state["ai_recommended_test"] = res_data.get("recommended_test")
+                    st.session_state["ai_test_reason"] = res_data.get("test_reason")
+                    st.session_state["ai_run_type"] = res_data.get("run_type")
+                    st.session_state["ai_preloaded_roles"] = res_data.get("variables", {})
+                    st.session_state["ai_preloaded_scales"] = res_data.get("scales", {})
+                    st.session_state["ai_preloaded_questions"] = res_data.get("preset_questions_by_step", {})
                     
                     st.toast("✅ Exam Prep & Anxiety dataset loaded!")
                     st.rerun()
@@ -663,11 +782,14 @@ with col_left:
                     st.session_state["file_name"] = "demo_coffee_focus_rates.csv"
                     reset_variable_states()
                     
-                    with st.spinner("StatsBuddy AI analyzing the Coffee dataset..."):
-                        rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, "coffee_focus_rates.csv")
-                    st.session_state["ai_recommended_test"] = rec_test
-                    st.session_state["ai_test_reason"] = rec_reason
-                    st.session_state["ai_run_type"] = rec_run_type
+                    with st.spinner("StatsBuddy AI preloading Coffee dataset mapping..."):
+                        res_data = get_ai_recommendation_safely(df, "coffee_focus_rates.csv")
+                    st.session_state["ai_recommended_test"] = res_data.get("recommended_test")
+                    st.session_state["ai_test_reason"] = res_data.get("test_reason")
+                    st.session_state["ai_run_type"] = res_data.get("run_type")
+                    st.session_state["ai_preloaded_roles"] = res_data.get("variables", {})
+                    st.session_state["ai_preloaded_scales"] = res_data.get("scales", {})
+                    st.session_state["ai_preloaded_questions"] = res_data.get("preset_questions_by_step", {})
                     
                     st.toast("✅ Coffee focus levels dataset loaded!")
                     st.rerun()
@@ -678,11 +800,14 @@ with col_left:
                     st.session_state["file_name"] = "demo_diet_weight_losses.csv"
                     reset_variable_states()
                     
-                    with st.spinner("StatsBuddy AI analyzing the Diet dataset..."):
-                        rec_test, rec_reason, rec_run_type = get_ai_recommendation_safely(df, "diet_weight_losses.csv")
-                    st.session_state["ai_recommended_test"] = rec_test
-                    st.session_state["ai_test_reason"] = rec_reason
-                    st.session_state["ai_run_type"] = rec_run_type
+                    with st.spinner("StatsBuddy AI preloading Diet dataset mapping..."):
+                        res_data = get_ai_recommendation_safely(df, "diet_weight_losses.csv")
+                    st.session_state["ai_recommended_test"] = res_data.get("recommended_test")
+                    st.session_state["ai_test_reason"] = res_data.get("test_reason")
+                    st.session_state["ai_run_type"] = res_data.get("run_type")
+                    st.session_state["ai_preloaded_roles"] = res_data.get("variables", {})
+                    st.session_state["ai_preloaded_scales"] = res_data.get("scales", {})
+                    st.session_state["ai_preloaded_questions"] = res_data.get("preset_questions_by_step", {})
                     
                     st.toast("✅ Diet weight losses dataset loaded!")
                     st.rerun()
@@ -724,12 +849,16 @@ with col_left:
                     is_num = pd.api.types.is_numeric_dtype(clean_series)
                     
                     if col_str not in st.session_state["variables"]:
-                        if is_num and unique_count > 5 and "DV" not in st.session_state["variables"].values():
-                            st.session_state["variables"][col_str] = "Effect (Dependent)"
-                        elif unique_count <= 5:
-                            st.session_state["variables"][col_str] = "Cause (Independent)"
+                        preloaded_roles = st.session_state.get("ai_preloaded_roles", {})
+                        if preloaded_roles and col_str in preloaded_roles:
+                            st.session_state["variables"][col_str] = preloaded_roles[col_str]
                         else:
-                            st.session_state["variables"][col_str] = "Exclude"
+                            if is_num and unique_count > 5 and "DV" not in st.session_state["variables"].values():
+                                st.session_state["variables"][col_str] = "Effect (Dependent)"
+                            elif unique_count <= 5:
+                                st.session_state["variables"][col_str] = "Cause (Independent)"
+                            else:
+                                st.session_state["variables"][col_str] = "Exclude"
                     
                     val = st.session_state["variables"][col_str]
                     st.markdown(f"**Variable role classification for:** `{col_str}` *(Samples: {samples_list}, Unique values: {unique_count})*")
@@ -747,16 +876,21 @@ with col_left:
                         st.session_state["variables"][col_str] = "Exclude"
                         st.rerun()
                     
-                    # Determine recommended role statically based on data profiles to remain constant
-                    if is_num and unique_count > 5:
-                        rec_role = "Effect (Dependent)"
-                        rec_reason = f"continuous numerical profiles (unique values = {unique_count}) are mathematically ideal representative outcome metrics for comparative or regression modeling."
-                    elif unique_count <= 5:
-                        rec_role = "Cause (Independent)"
-                        rec_reason = f"containing discrete subgroups (unique count = {unique_count}) makes it highly suitable for splitting comparison parameters and grouping cohorts."
+                    # Determine recommended role
+                    preloaded_roles = st.session_state.get("ai_preloaded_roles", {})
+                    if preloaded_roles and col_str in preloaded_roles:
+                        rec_role = preloaded_roles[col_str]
+                        rec_reason = "the silently preloaded AI experimental methodology analyzed this column and classified it for optimal output modeling."
                     else:
-                        rec_role = "Exclude"
-                        rec_reason = "complex or high-cardinality values that are best excluded to focus strictly on primary active study variables."
+                        if is_num and unique_count > 5:
+                            rec_role = "Effect (Dependent)"
+                            rec_reason = f"continuous numerical profiles (unique values = {unique_count}) are mathematically ideal representative outcome metrics for comparative or regression modeling."
+                        elif unique_count <= 5:
+                            rec_role = "Cause (Independent)"
+                            rec_reason = f"containing discrete subgroups (unique count = {unique_count}) makes it highly suitable for splitting comparison parameters and grouping cohorts."
+                        else:
+                            rec_role = "Exclude"
+                            rec_reason = "complex or high-cardinality values that are best excluded to focus strictly on primary active study variables."
                     
                     st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_role}</b> because {rec_reason}</p>", unsafe_allow_html=True)
                     
@@ -780,12 +914,16 @@ with col_left:
                         unique_count = clean_series.nunique()
                         
                         if col_str not in st.session_state["scales"]:
-                            if not is_num:
-                                st.session_state["scales"][col_str] = "Nominal (Categories)"
-                            elif unique_count < 6:
-                                st.session_state["scales"][col_str] = "Ordinal (Ordered)"
+                            preloaded_scales = st.session_state.get("ai_preloaded_scales", {})
+                            if preloaded_scales and col_str in preloaded_scales:
+                                st.session_state["scales"][col_str] = preloaded_scales[col_str]
                             else:
-                                st.session_state["scales"][col_str] = "Ratio (True Zero)"
+                                if not is_num:
+                                    st.session_state["scales"][col_str] = "Nominal (Categories)"
+                                elif unique_count < 6:
+                                    st.session_state["scales"][col_str] = "Ordinal (Ordered)"
+                                else:
+                                    st.session_state["scales"][col_str] = "Ratio (True Zero)"
                                 
                         val = st.session_state["scales"][col_str]
                         st.markdown(f"**Scale of measurement classification for:** `{col_str}` *(Classified as {st.session_state['variables'][col_str]})*")
@@ -803,16 +941,21 @@ with col_left:
                             st.session_state["scales"][col_str] = "Ratio (True Zero)"
                             st.rerun()
                         
-                        # Determine recommended scale statically based on data profiles to remain constant
-                        if not is_num:
-                            rec_scale = "Nominal (Categories)"
-                            rec_scale_reason = "this column contains qualitative grouping attributes (non-ordered attributes) serving as categorical cohorts rather than continuous mathematical values."
-                        elif unique_count < 6:
-                            rec_scale = "Ordinal (Ordered)"
-                            rec_scale_reason = f"the small subset of distinct levels ({unique_count} unique items) suggests relative ordered positions or ranks (e.g. Likert scales) where intervals are not mathematically equal."
+                        # Determine recommended scale
+                        preloaded_scales = st.session_state.get("ai_preloaded_scales", {})
+                        if preloaded_scales and col_str in preloaded_scales:
+                            rec_scale = preloaded_scales[col_str]
+                            rec_scale_reason = "the silently preloaded AI experimental methodology analyzed this column and classified its measurement scale for optimal statistical matching."
                         else:
-                            rec_scale = "Ratio (True Zero)"
-                            rec_scale_reason = "this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations."
+                            if not is_num:
+                                rec_scale = "Nominal (Categories)"
+                                rec_scale_reason = "this column contains qualitative grouping attributes (non-ordered attributes) serving as categorical cohorts rather than continuous mathematical values."
+                            elif unique_count < 6:
+                                rec_scale = "Ordinal (Ordered)"
+                                rec_scale_reason = f"the small subset of distinct levels ({unique_count} unique items) suggests relative ordered positions or ranks (e.g. Likert scales) where intervals are not mathematically equal."
+                            else:
+                                rec_scale = "Ratio (True Zero)"
+                                rec_scale_reason = "this represents a numerical column with continuous density and a valid absolute physical zero, making it fully prepared for parametric and linear regression computations."
                         
                         st.markdown(f"<p style='font-size:11.5px; color:#4f46e5; margin-top:-8px; margin-bottom:15px; font-style:italic;'>💡 StatsBuddy recommendation: <b>{rec_scale}</b> because {rec_scale_reason}</p>", unsafe_allow_html=True)
 
@@ -934,6 +1077,31 @@ with col_left:
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
+                
+                # Display Test Selection overrides
+                standard_test_options = {
+                    "Independent Samples t-test": "t_test",
+                    "One-Way ANOVA": "anova",
+                    "Pearson Bivariate Correlation & Simple Regression": "regression",
+                    "Chi-Square Test of Independence": "chi_square",
+                    "Mann-Whitney U Non-Parametric Test": "mann_whitney"
+                }
+                
+                rec_val_index = 0
+                for i, (name, val) in enumerate(standard_test_options.items()):
+                    if val == run_type:
+                        rec_val_index = i
+                        break
+                
+                st.markdown("##### 🧪 Select / Override Active Testing Algorithm")
+                selected_test_name = st.selectbox(
+                    "You can override the matching algorithm and force any specific test below:",
+                    options=list(standard_test_options.keys()),
+                    index=rec_val_index,
+                    help="Normally, StatsBuddy matches the mathematically ideal test. But if you have assigned categorical columns or custom configurations, you can choose another test here."
+                )
+                run_type = standard_test_options[selected_test_name]
+                recommended_test = selected_test_name
                     
                 st.markdown(f"""
                 <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
@@ -1042,7 +1210,7 @@ with col_left:
                         
                         st.session_state["last_test_result"] = res_val
                         st.session_state["last_test_vars"] = {
-                            "type": "group_comparison" if run_type in ["t_test", "mann_whitney", "chi_square", "anova"] else "regression",
+                            "type": run_type,
                             "col": main_dv,
                             "cat_col": main_iv,
                             "num_col": main_dv,
@@ -1188,20 +1356,65 @@ with col_right:
                     with st.chat_message("assistant", avatar="🤖"):
                         st.markdown(message)
                         
-        # Presets questions
-        st.markdown("<p style='font-size:11px; font-weight:700; color:#475569; margin: 5px 0 2px 0;'>💡 Presets suggestions:</p>", unsafe_allow_html=True)
+        # Define step-connected offline preset suggestions
+        MOCK_PRESET_QUESTIONS = {
+            1: [
+                "What dataset file formats are supported?",
+                "How do I clean missing rows from raw CSV files?"
+            ],
+            2: [
+                "How do I determine cause vs effect roles?",
+                "When should I exclude a column from stats analysis?"
+            ],
+            3: [
+                "What is Nominal vs Ordinal measurement scale?",
+                "Why should numeric IDs be set as Nominal?"
+            ],
+            4: [
+                "How do I write a solid Alternative Hypothesis?",
+                "What is the physical meaning of Null Hypothesis?"
+            ],
+            5: [
+                "Explain parametric test normality assumptions.",
+                "What is the homoscedasticity assumption check?"
+            ],
+            6: [
+                "How do I interpret p-values in plain English?",
+                "What is the correct way to construct APA Tables?"
+            ]
+        }
+        
+        active_step = st.session_state.get("step", 1)
+        questions = []
+        
+        # Pull preloaded AI questions if available
+        ai_preloaded_questions = st.session_state.get("ai_preloaded_questions", {})
+        step_key = f"step_{active_step}"
+        if ai_preloaded_questions and step_key in ai_preloaded_questions:
+            questions = ai_preloaded_questions[step_key]
+            
+        if not questions:
+            questions = MOCK_PRESET_QUESTIONS.get(active_step, [
+                "Explain model variables matching.",
+                "How to analyze dataset results?"
+            ])
+            
+        q1 = questions[0] if len(questions) > 0 else "Explain variables matching."
+        q2 = questions[1] if len(questions) > 1 else "How to analyze dataset results?"
+        
+        st.markdown("<p style='font-size:11px; font-weight:700; color:#cbd5e1; margin: 5px 0 2px 0;'>💡 Presets suggestions (Contextual to active step):</p>", unsafe_allow_html=True)
         suggest_cols = st.columns([1.1, 1.1, 0.8])
         with suggest_cols[0]:
-            if st.button("What is continuous vs nominal?", use_container_width=True, key="preset_1"):
-                preset_query = "What is the key difference between a continuous variable and a nominal/categorical variable?"
-                st.session_state["chat_history"].append(("user", preset_query))
-                st.session_state["active_coach_query"] = preset_query
+            btn_lbl_1 = q1[:25] + "..." if len(q1) > 27 else q1
+            if st.button(btn_lbl_1, use_container_width=True, key="preset_1", help=q1):
+                st.session_state["chat_history"].append(("user", q1))
+                st.session_state["active_coach_query"] = q1
                 st.rerun()
         with suggest_cols[1]:
-            if st.button("Explain H1 vs H0 null?", use_container_width=True, key="preset_2"):
-                preset_query = "What is the difference between an Alternative Hypothesis (H1) and a Null Hypothesis (H0)?"
-                st.session_state["chat_history"].append(("user", preset_query))
-                st.session_state["active_coach_query"] = preset_query
+            btn_lbl_2 = q2[:25] + "..." if len(q2) > 27 else q2
+            if st.button(btn_lbl_2, use_container_width=True, key="preset_2", help=q2):
+                st.session_state["chat_history"].append(("user", q2))
+                st.session_state["active_coach_query"] = q2
                 st.rerun()
         with suggest_cols[2]:
             if st.button("🧹 Clear", use_container_width=True, key="clear_chat"):
@@ -1209,13 +1422,6 @@ with col_right:
                 st.session_state["active_coach_query"] = None
                 st.toast("🧹 Chat history cleared successfully!")
                 st.rerun()
-                
-        # Advanced API secret accordion config
-        with st.expander("🔑 Advanced API Config settings (Optional)"):
-            custom_key = st.text_input("Enter custom Gemini API Key:", type="password", help="If left empty, defaults to server-side loaded key.")
-            if custom_key:
-                api_key = custom_key
-                genai.configure(api_key=api_key)
                 
         # Main chat interactive text box
         chat_inp = st.chat_input("Ask StatsBuddy stats inquiries...")
