@@ -41,12 +41,19 @@ def make_json_serializable(obj):
     else:
         return obj
 
-def safe_generate_content(system_instruction, prompt):
+def safe_generate_content(system_instruction, prompt, model_name=None):
     """
     Safely creates generative model with fallbacks to avoid 403/Project Denied access problems.
     If a 403/Denied/Forbidden error is encountered, raises a specific descriptive exception.
     """
-    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+    # Use selected model if provided, or default to gemini-2.5-flash
+    selected = model_name or st.session_state.get("selected_model", "gemini-2.5-flash")
+    
+    # Try the selected model, fallback to 3.5-flash if preferred/default fails
+    models_to_try = [selected]
+    if selected != "gemini-3.5-flash":
+        models_to_try.append("gemini-3.5-flash")
+        
     last_err = None
     for model in models_to_try:
         try:
@@ -59,7 +66,7 @@ def safe_generate_content(system_instruction, prompt):
         except Exception as err:
             err_str = str(err).lower()
             if "403" in err_str or "denied" in err_str or "project" in err_str or "forbidden" in err_str:
-                raise Exception("Your Google Cloud project / API Key has been denied access (403). Please configure an active and valid GEMINI_API_KEY in the AI Studio settings or check your billing status.")
+                raise Exception("Your current AI model access has been denied (403). Please verify your API key and quota in Google AI Studio.")
             elif "not found" in err_str or "support" in err_str or "503" in err_str or "model" in err_str:
                 last_err = err
                 continue
@@ -67,7 +74,7 @@ def safe_generate_content(system_instruction, prompt):
                 raise err
     if last_err:
         raise last_err
-    raise Exception("All Gemini model options failed to respond.")
+    raise Exception("All attempted Gemini model options failed to respond.")
 
 def get_ai_recommendation_safely(df, file_name):
     """
@@ -617,7 +624,18 @@ st.sidebar.markdown("""
 </div>
 """, unsafe_allow_html=True)
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔑 API Configuration")
+st.sidebar.markdown("### ⚙️ AI Settings")
+model_options = {
+    "Gemini 2.5 Flash": "gemini-2.5-flash",
+    "Gemini 3.5 Flash": "gemini-3.5-flash"
+}
+selected_model_name = st.sidebar.selectbox(
+    "Select AI Model:",
+    options=list(model_options.keys()),
+    index=0
+)
+st.session_state["selected_model"] = model_options[selected_model_name]
+
 custom_key_val = st.sidebar.text_input(
     "Custom Gemini API Key:",
     type="password",
@@ -1142,13 +1160,14 @@ with col_left:
                 ai_run_type = st.session_state.get("ai_run_type")
                 
                 is_using_ai = False
-                is_gemini_working = st.session_state.get("gemini_api_working", True)
+                # If API key is available, consider it working for the sake of recommendation logic if not explicitly failed
+                if api_key:
+                    is_using_ai = True
                 
-                if ai_test and is_gemini_working:
+                if ai_test and is_using_ai:
                     recommended_test = ai_test
                     test_reason = ai_reason
                     run_type = ai_run_type
-                    is_using_ai = True
                 else:
                     recommended_test = "Nonparametric Alternative"
                     test_reason = "Mixed measurement characteristics suggest running a robust nonparametric rank test."
@@ -1171,21 +1190,66 @@ with col_left:
                         recommended_test = "Chi-Square Test of Independence"
                         test_reason = f"Both Cause and Effect variables represent categorical divisions, needing coordinate contingency counts comparisons."
                         run_type = "chi_square"
+
+                # Define educational content
+                test_edu = {
+                    "Independent Samples t-test": {
+                        "why": "It is recommended because you have two distinct groups and a continuous dependent variable.",
+                        "testing": "It tests whether the mean difference between two independent groups is significantly different from zero.",
+                        "does": "It calculates the t-statistic to determine if findings likely occurred by chance."
+                    },
+                    "One-Way ANOVA": {
+                        "why": "It is recommended because you have more than two groups to compare at once.",
+                        "testing": "It tests whether the means of three or more independent groups are significantly different.",
+                        "does": "It analyzes the variance between groups compared to variance within groups."
+                    },
+                    "Pearson Bivariate Correlation & Simple Regression": {
+                        "why": "It is recommended because both variables are continuous and you want to predict one from the other.",
+                        "testing": "It tests the strength and direction of a linear relationship between two variables.",
+                        "does": "It fits a regression line to predict outcomes based on independent inputs."
+                    },
+                    "Chi-Square Test of Independence": {
+                        "why": "It is recommended because both variables are categorical, and you want to test for association.",
+                        "testing": "It tests whether two categorical variables are independent of each other.",
+                        "does": "It compares observed frequencies in contingency tables against expected frequencies."
+                    },
+                    "Mann-Whitney U Non-Parametric Test": {
+                        "why": "It is recommended as a robust alternative when normality assumptions fail.",
+                        "testing": "It tests whether the distributions of two independent groups differ.",
+                        "does": "It compares ranks rather than means, making it less sensitive to outliers."
+                    }
+                }
                 
-                if is_using_ai:
+                # Default educational info for AI or unknown tests
+                edu_info = test_edu.get(recommended_test, {
+                    "why": "The system framework matched your variable characteristics to this method.",
+                    "testing": "It determines if your observed relationships align with statistical expectations.",
+                    "does": "It runs the core mathematical comparison for your dataset."
+                })
+
+                if is_using_ai and api_key:
                     st.markdown(f"""
-                    <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                        <span style="background-color: #22c55e; color: white; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 4px;">🤖 STATSBUDDY AI RECOMMENDED TEST</span>
-                        <p style="font-size: 16px; font-weight: 800; color: #166534; margin: 8px 0 2px 0;">{recommended_test}</p>
-                        <p style="font-size: 12.5px; color: #15803d; margin: 4px 0 0 0; line-height: 1.4;">{test_reason}</p>
+                    <div style="background-color: var(--panel-bg); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <span style="background-color: var(--accent-color); color: white; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 4px;">🤖 AI RECOMMENDED TEST</span>
+                        <p style="font-size: 16px; font-weight: 800; color: var(--color-text); margin: 8px 0 2px 0;">{recommended_test}</p>
+                        <p style="font-size: 12.5px; color: var(--sub-text); margin: 4px 0 0 0; line-height: 1.4;">{test_reason}</p>
+                        <div style="margin-top: 10px; font-size: 12px; color: var(--sub-text);">
+                            <p><b>Why:</b> {edu_info['why']}</p>
+                            <p><b>Testing:</b> {edu_info['testing']}</p>
+                            <p><b>What it does:</b> {edu_info['does']}</p>
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    st.markdown("""
-                    <div style="background-color: var(--error-banner-bg); border: 1px solid var(--error-banner-border); padding: 12px; border-radius: 8px; margin-bottom: 20px;">
-                        <p style="font-size: 12px; color: var(--error-banner-text); margin: 0; font-weight: 600;">
-                            ⚠️ StatsBuddy recommendation is currently unavailable. Standard offline analytical matching procedures have been loaded.
-                        </p>
+                    st.markdown(f"""
+                    <div style="background-color: var(--panel-bg); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <p style="font-size: 16px; font-weight: 800; color: var(--color-text); margin: 8px 0 2px 0;">{recommended_test}</p>
+                        <p style="font-size: 12.5px; color: var(--sub-text); margin: 4px 0 0 0; line-height: 1.4;">{test_reason}</p>
+                        <div style="margin-top: 10px; font-size: 12px; color: var(--sub-text);">
+                            <p><b>Why:</b> {edu_info['why']}</p>
+                            <p><b>Testing:</b> {edu_info['testing']}</p>
+                            <p><b>What it does:</b> {edu_info['does']}</p>
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
                 
